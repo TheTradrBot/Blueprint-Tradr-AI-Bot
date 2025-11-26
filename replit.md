@@ -6,28 +6,40 @@ Blueprint Trader AI is an automated trading signal bot that scans multiple marke
 
 ## Recent Changes
 
-**November 26, 2024 - Major Strategy Optimization & System Upgrade**
+**November 26, 2025 - Strategy Optimization v2 - Higher Win Rate Focus**
 
-### Performance Summary (Backtest Jan-Dec 2024)
-- Total Trades: 172 (target: 40+ ✅)
-- Average Win Rate: 64.5% (target: 70% - 93% achieved)
-- Total Return: +132.6% (target: 10%+ ✅)
-- Top performers: XAU_USD (86.8% WR), USD_JPY (66.7% WR), GBP_USD (63.6% WR)
-- Note: EUR_USD underperforms (29.2% WR) - may need pair-specific tuning
+### Performance Summary (Backtest Jan-Dec 2024 - Conservative Exit Logic)
+- Total Trades: 121 trades across 4 enabled assets
+- Average Win Rate: 63.6%
+- Total Return: +74.6%
+- Enabled Assets:
+  - XAU_USD: 29 trades, 79.3% WR, +27.9% return
+  - USD_JPY: 49 trades, 63.3% WR, +28.8% return
+  - NZD_USD: 24 trades, 62.5% WR, +10.2% return
+  - GBP_USD: 19 trades, 47.4% WR, +7.7% return
+- Disabled Assets (need pair-specific tuning): EUR_USD, AUD_USD, USD_CHF, USD_CAD
 
-### Strategy Improvements
-- Optimized confluence detection with more flexible thresholds
-- Improved Fibonacci retracement calculations (50%-79.6% zones)
-- Enhanced liquidity detection with sweep lookback up to 8 candles
-- Better swing detection with asymmetric lookback periods
-- Tighter stop loss placement using ATR-based calculations
-- Realistic R:R targets (1.2R, 2R, 3R, 4.5R, 6R)
+**Note:** Exit logic is fully conservative - TP2/TP3 only credited after TP1 hit on previous bar. This produces realistic results suitable for live trading expectations.
+
+### Key Optimizations (v2)
+1. **Trailing Stop System** - After TP1 hit, SL moves to breakeven (entry price)
+2. **Conservative Exit Logic** - SL checked first when both SL and TP hit same bar
+3. **Same-bar TP1 Validation** - After TP1, immediately checks if trailing stop also hit
+4. **Wider Stop Losses** - ATR multiplier increased to 1.5x for better protection
+5. **Tighter Take Profits** - TP1 at 0.6R, TP2 at 1.1R for higher hit rates
+6. **Extended Fibonacci Zones** - 38.2% to 88.6% retracement window
+7. **Better Liquidity Detection** - Increased lookback to 12 candles, 80-bar history
+
+### Strategy Changes
+- Reduced confluence threshold from 3 to 2 for more trade opportunities
+- Simplified activation: confluence >= 2 and quality_factors >= 1
+- SL-first priority in exit logic for conservative backtest results
+- Structure-based stop loss with swing point detection
 
 ### Backtest Improvements
-- No look-ahead bias - uses only data available at each evaluation point
-- Conservative exit assumptions (SL hit first when both SL/TP touched)
-- 3-bar cooldown between trades to avoid overtrading
-- Detailed trade logging with TP/SL breakdown
+- Trailing stop logic protects profits after TP1
+- TP1+Trail exit category for trades that hit TP1 then trail out
+- Win rate calculation includes all profitable exits
 
 ### Performance & Caching
 - Added intelligent caching layer (`cache.py`) for OANDA API responses

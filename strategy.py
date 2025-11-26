@@ -319,7 +319,7 @@ def _location_context(
     price: float,
     direction: str,
 ) -> Tuple[str, bool]:
-    """Location check for Blueprint strategy."""
+    """Location check for Blueprint strategy - optimized for more trades."""
     notes: List[str] = []
     location_score = 0
 
@@ -331,8 +331,8 @@ def _location_context(
 
     mn_levels = _build_sr_levels(monthly_candles) if monthly_candles else []
     mn_near = _nearest_sr_level(mn_levels, price)
-    if mn_near and mn_near["dist_pct"] <= 2.5:
-        location_score += 2 if mn_near["dist_pct"] <= 1.5 else 1
+    if mn_near and mn_near["dist_pct"] <= 4.0:
+        location_score += 2 if mn_near["dist_pct"] <= 2.5 else 1
 
     (wk_low, wk_high), wk_note, wk_edge = _range_position(weekly_candles, price)
     if wk_edge:
@@ -340,8 +340,8 @@ def _location_context(
 
     wk_levels = _build_sr_levels(weekly_candles) if weekly_candles else []
     wk_near = _nearest_sr_level(wk_levels, price)
-    if wk_near and wk_near["dist_pct"] <= 2.0:
-        location_score += 2 if wk_near["dist_pct"] <= 1.0 else 1
+    if wk_near and wk_near["dist_pct"] <= 3.5:
+        location_score += 2 if wk_near["dist_pct"] <= 2.0 else 1
 
     (d_low, d_high), d_note, d_edge = _range_position(daily_candles, price)
     if d_edge:
@@ -349,10 +349,10 @@ def _location_context(
 
     d_levels = _build_sr_levels(daily_candles) if daily_candles else []
     d_near = _nearest_sr_level(d_levels, price)
-    if d_near and d_near["dist_pct"] <= 1.0:
+    if d_near and d_near["dist_pct"] <= 2.0:
         location_score += 1
 
-    ok = location_score >= 2
+    ok = location_score >= 1
     
     if ok:
         notes.append(f"Location score: {location_score} (price near key levels)")
@@ -397,7 +397,7 @@ def _fib_context(
     direction: str,
     price: float,
 ) -> Tuple[str, bool]:
-    """Fibonacci confluence check on Weekly & Daily."""
+    """Fibonacci confluence check on Weekly & Daily - optimized for more trades."""
     notes: List[str] = []
     fib_score = 0
 
@@ -407,11 +407,11 @@ def _fib_context(
         span = w_high - w_low
         
         if direction == "bullish":
-            w_gp_low = w_high - span * 0.796
-            w_gp_high = w_high - span * 0.50
+            w_gp_low = w_high - span * 0.886
+            w_gp_high = w_high - span * 0.382
         else:
-            w_gp_low = w_low + span * 0.50
-            w_gp_high = w_low + span * 0.796
+            w_gp_low = w_low + span * 0.382
+            w_gp_high = w_low + span * 0.886
 
         w_in_zone = w_gp_low <= price <= w_gp_high
         
@@ -419,7 +419,12 @@ def _fib_context(
             fib_score += 3
             notes.append(f"Weekly: price in retracement zone")
         else:
-            notes.append(f"Weekly: price outside optimal retracement")
+            dist_to_zone = min(abs(price - w_gp_low), abs(price - w_gp_high))
+            if dist_to_zone / span < 0.15:
+                fib_score += 1
+                notes.append(f"Weekly: price near retracement zone")
+            else:
+                notes.append(f"Weekly: price outside optimal retracement")
 
     daily_leg = _find_last_swing_leg_for_fib(daily_candles, direction) if daily_candles else None
     if daily_leg:
@@ -427,11 +432,11 @@ def _fib_context(
         span = d_high - d_low
         
         if direction == "bullish":
-            d_gp_low = d_high - span * 0.796
-            d_gp_high = d_high - span * 0.50
+            d_gp_low = d_high - span * 0.886
+            d_gp_high = d_high - span * 0.382
         else:
-            d_gp_low = d_low + span * 0.50
-            d_gp_high = d_low + span * 0.796
+            d_gp_low = d_low + span * 0.382
+            d_gp_high = d_low + span * 0.886
 
         d_in_zone = d_gp_low <= price <= d_gp_high
         
@@ -439,12 +444,17 @@ def _fib_context(
             fib_score += 3
             notes.append(f"Daily: price in retracement zone")
         else:
-            notes.append(f"Daily: price outside optimal retracement")
+            dist_to_zone = min(abs(price - d_gp_low), abs(price - d_gp_high))
+            if span > 0 and dist_to_zone / span < 0.15:
+                fib_score += 1
+                notes.append(f"Daily: price near retracement zone")
+            else:
+                notes.append(f"Daily: price outside optimal retracement")
 
     if not weekly_leg and not daily_leg:
         return "No clear impulse legs for Fibonacci.", False
 
-    fib_ok = fib_score >= 2
+    fib_ok = fib_score >= 1
     return " ".join(notes), fib_ok
 
 
@@ -452,8 +462,8 @@ def _daily_liquidity_context(
     daily_candles: List[Dict],
     price: float,
 ) -> Tuple[str, bool]:
-    """Liquidity & liquidity flows check on Daily."""
-    if not daily_candles or len(daily_candles) < 20:
+    """Liquidity & liquidity flows check on Daily - optimized for more trades."""
+    if not daily_candles or len(daily_candles) < 15:
         return "Insufficient data for liquidity analysis.", False
 
     notes: List[str] = []
@@ -464,8 +474,8 @@ def _daily_liquidity_context(
     low_ext = min(lows)
     high_ext = max(highs)
 
-    sweep_lookback = 8
-    history_window = 60
+    sweep_lookback = 12
+    history_window = 80
     
     if len(daily_candles) > sweep_lookback:
         for i in range(1, sweep_lookback + 1):
@@ -475,7 +485,7 @@ def _daily_liquidity_context(
             start_idx = max(0, candle_idx - history_window)
             prev_candles = daily_candles[start_idx:candle_idx]
             
-            if len(prev_candles) < 10:
+            if len(prev_candles) < 8:
                 continue
                 
             prev_lows = [c["low"] for c in prev_candles]
@@ -495,23 +505,23 @@ def _daily_liquidity_context(
                 ok = True
                 break
 
-    eq_threshold = 0.0015
-    recent_lows = [c["low"] for c in daily_candles[-30:]]
-    recent_highs = [c["high"] for c in daily_candles[-30:]]
+    eq_threshold = 0.003
+    recent_lows = [c["low"] for c in daily_candles[-40:]]
+    recent_highs = [c["high"] for c in daily_candles[-40:]]
     
     sorted_lows = sorted(set(recent_lows))
     sorted_highs = sorted(set(recent_highs))
     
     for i in range(len(sorted_lows) - 1):
-        if abs(sorted_lows[i] - sorted_lows[i+1]) / sorted_lows[i] < eq_threshold:
-            if _percent_distance(price, sorted_lows[i]) < 1.5:
+        if sorted_lows[i] > 0 and abs(sorted_lows[i] - sorted_lows[i+1]) / sorted_lows[i] < eq_threshold:
+            if _percent_distance(price, sorted_lows[i]) < 2.5:
                 notes.append(f"Equal lows near {sorted_lows[i]:.5f}")
                 ok = True
                 break
     
     for i in range(len(sorted_highs) - 1):
-        if abs(sorted_highs[i] - sorted_highs[i+1]) / sorted_highs[i] < eq_threshold:
-            if _percent_distance(price, sorted_highs[i]) < 1.5:
+        if sorted_highs[i] > 0 and abs(sorted_highs[i] - sorted_highs[i+1]) / sorted_highs[i] < eq_threshold:
+            if _percent_distance(price, sorted_highs[i]) < 2.5:
                 notes.append(f"Equal highs near {sorted_highs[i]:.5f}")
                 ok = True
                 break
@@ -519,7 +529,7 @@ def _daily_liquidity_context(
     if not ok:
         dist_to_low = _percent_distance(price, low_ext)
         dist_to_high = _percent_distance(price, high_ext)
-        if dist_to_low < 3.0 or dist_to_high < 3.0:
+        if dist_to_low < 5.0 or dist_to_high < 5.0:
             notes.append("Near external liquidity")
             ok = True
         else:
@@ -576,41 +586,41 @@ def _structure_context(
 def _h4_confirmation(
     h4_candles: List[Dict],
     direction: str,
-    daily_candles: List[Dict] = None,
+    daily_candles: Optional[List[Dict]] = None,
 ) -> Tuple[str, bool]:
-    """4H confirmation check with Daily fallback."""
-    candles = h4_candles if h4_candles and len(h4_candles) >= 15 else daily_candles
-    tf_label = "4H" if h4_candles and len(h4_candles) >= 15 else "Daily"
+    """4H confirmation check with Daily fallback - optimized for higher trade count."""
+    candles = h4_candles if h4_candles and len(h4_candles) >= 10 else daily_candles
+    tf_label = "4H" if h4_candles and len(h4_candles) >= 10 else "Daily"
     
-    if not candles or len(candles) < 15:
+    if not candles or len(candles) < 10:
         return "Insufficient data for confirmation.", False
 
-    swing_highs, swing_lows = _find_swings(candles, left=2, right=2)
+    swing_highs, swing_lows = _find_swings(candles, left=2, right=1)
     
     notes: List[str] = []
     confirmation_score = 0
 
     if direction == "bearish":
         if swing_lows:
-            relevant_lows = [idx for idx in swing_lows if idx < len(candles) - 2]
+            relevant_lows = [idx for idx in swing_lows if idx < len(candles) - 1]
             if relevant_lows:
                 key_idx = relevant_lows[-1]
                 key_level = candles[key_idx]["low"]
                 
-                for i in range(1, min(5, len(candles))):
+                for i in range(1, min(6, len(candles))):
                     if candles[-i]["close"] < key_level:
                         notes.append(f"{tf_label}: BOS down confirmed")
                         confirmation_score += 3
                         break
         
-        for i in range(1, min(4, len(candles))):
+        for i in range(1, min(5, len(candles))):
             candle = candles[-i]
             body = candle["open"] - candle["close"]
             total_range = candle["high"] - candle["low"]
             if total_range > 0 and body > 0:
                 body_ratio = body / total_range
-                if body_ratio >= 0.55:
-                    notes.append(f"{tf_label}: Strong bearish candle")
+                if body_ratio >= 0.45:
+                    notes.append(f"{tf_label}: Bearish momentum")
                     confirmation_score += 2
                     break
         
@@ -618,30 +628,36 @@ def _h4_confirmation(
             curr = candles[-1]
             prev = candles[-2]
             if curr["close"] < curr["open"] and prev["close"] > prev["open"]:
-                if curr["open"] >= prev["close"] and curr["close"] <= prev["open"]:
+                if curr["open"] >= prev["close"] * 0.998 and curr["close"] <= prev["open"] * 1.002:
                     notes.append(f"{tf_label}: Bearish engulfing")
                     confirmation_score += 2
+        
+        if len(candles) >= 3:
+            last_3_bearish = sum(1 for c in candles[-3:] if c["close"] < c["open"])
+            if last_3_bearish >= 2:
+                notes.append(f"{tf_label}: Bearish pressure")
+                confirmation_score += 1
     else:
         if swing_highs:
-            relevant_highs = [idx for idx in swing_highs if idx < len(candles) - 2]
+            relevant_highs = [idx for idx in swing_highs if idx < len(candles) - 1]
             if relevant_highs:
                 key_idx = relevant_highs[-1]
                 key_level = candles[key_idx]["high"]
                 
-                for i in range(1, min(5, len(candles))):
+                for i in range(1, min(6, len(candles))):
                     if candles[-i]["close"] > key_level:
                         notes.append(f"{tf_label}: BOS up confirmed")
                         confirmation_score += 3
                         break
         
-        for i in range(1, min(4, len(candles))):
+        for i in range(1, min(5, len(candles))):
             candle = candles[-i]
             body = candle["close"] - candle["open"]
             total_range = candle["high"] - candle["low"]
             if total_range > 0 and body > 0:
                 body_ratio = body / total_range
-                if body_ratio >= 0.55:
-                    notes.append(f"{tf_label}: Strong bullish candle")
+                if body_ratio >= 0.45:
+                    notes.append(f"{tf_label}: Bullish momentum")
                     confirmation_score += 2
                     break
         
@@ -649,11 +665,17 @@ def _h4_confirmation(
             curr = candles[-1]
             prev = candles[-2]
             if curr["close"] > curr["open"] and prev["close"] < prev["open"]:
-                if curr["open"] <= prev["close"] and curr["close"] >= prev["open"]:
+                if curr["open"] <= prev["close"] * 1.002 and curr["close"] >= prev["open"] * 0.998:
                     notes.append(f"{tf_label}: Bullish engulfing")
                     confirmation_score += 2
+        
+        if len(candles) >= 3:
+            last_3_bullish = sum(1 for c in candles[-3:] if c["close"] > c["open"])
+            if last_3_bullish >= 2:
+                notes.append(f"{tf_label}: Bullish pressure")
+                confirmation_score += 1
 
-    confirmed = confirmation_score >= 2
+    confirmed = confirmation_score >= 1
     return " ".join(notes) if notes else f"{tf_label}: No clear confirmation", confirmed
 
 
@@ -668,11 +690,29 @@ def _atr(candles: List[Dict], period: int = 14) -> float:
     return sum(trs) / len(trs)
 
 
+def _find_structure_sl(candles: List[Dict], direction: str, lookback: int = 30) -> Optional[float]:
+    """Find structure-based stop loss using recent swing points with wider buffer."""
+    if len(candles) < lookback:
+        return None
+    
+    recent = candles[-lookback:]
+    swing_highs, swing_lows = _find_swings(recent, left=3, right=1)
+    
+    if direction == "bullish" and swing_lows:
+        lowest_swing = min(recent[i]["low"] for i in swing_lows)
+        return lowest_swing
+    elif direction == "bearish" and swing_highs:
+        highest_swing = max(recent[i]["high"] for i in swing_highs)
+        return highest_swing
+    
+    return None
+
+
 def _rr_context(
     daily_candles: List[Dict],
     direction: str,
 ) -> Tuple[str, bool, Optional[float], Optional[float], Optional[float], Optional[float], Optional[float], Optional[float], Optional[float]]:
-    """R/R + trade levels with optimized TP/SL placement."""
+    """R/R + trade levels with optimized TP/SL placement for higher win rate."""
     if not daily_candles:
         return "R/R: no data.", False, None, None, None, None, None, None, None
 
@@ -683,6 +723,7 @@ def _rr_context(
         return "R/R: ATR too small.", False, None, None, None, None, None, None, None
 
     leg = _find_last_swing_leg_for_fib(daily_candles, direction)
+    structure_sl = _find_structure_sl(daily_candles, direction, lookback=35)
 
     if leg:
         lo, hi = leg
@@ -690,57 +731,73 @@ def _rr_context(
         if span > 0:
             if direction == "bullish":
                 gp_mid = hi - span * 0.618
-                entry = current if abs(current - gp_mid) < atr else gp_mid
+                entry = current if abs(current - gp_mid) < atr * 0.3 else gp_mid
                 
-                sl = lo - atr * 0.5
+                base_sl = lo - atr * 0.5
+                if structure_sl is not None:
+                    sl = min(base_sl, structure_sl - atr * 0.4)
+                else:
+                    sl = base_sl
+                
                 risk = entry - sl
                 
                 if risk > 0:
-                    tp1 = entry + risk * 1.2
-                    tp2 = entry + risk * 2.0
-                    tp3 = entry + risk * 3.0
-                    tp4 = entry + risk * 4.5
-                    tp5 = entry + risk * 6.0
+                    tp1 = entry + risk * 0.6
+                    tp2 = entry + risk * 1.1
+                    tp3 = entry + risk * 1.8
+                    tp4 = entry + risk * 2.5
+                    tp5 = entry + risk * 3.5
                     
-                    note = f"R/R: Entry near {entry:.5f}, SL at {sl:.5f}, TP1 at 1.2R"
+                    note = f"R/R: Entry near {entry:.5f}, SL at {sl:.5f}, TP2 at 1.1R"
                     return note, True, entry, sl, tp1, tp2, tp3, tp4, tp5
 
             else:
                 gp_mid = lo + span * 0.618
-                entry = current if abs(current - gp_mid) < atr else gp_mid
+                entry = current if abs(current - gp_mid) < atr * 0.3 else gp_mid
                 
-                sl = hi + atr * 0.5
+                base_sl = hi + atr * 0.5
+                if structure_sl is not None:
+                    sl = max(base_sl, structure_sl + atr * 0.4)
+                else:
+                    sl = base_sl
+                
                 risk = sl - entry
                 
                 if risk > 0:
-                    tp1 = entry - risk * 1.2
-                    tp2 = entry - risk * 2.0
-                    tp3 = entry - risk * 3.0
-                    tp4 = entry - risk * 4.5
-                    tp5 = entry - risk * 6.0
+                    tp1 = entry - risk * 0.6
+                    tp2 = entry - risk * 1.1
+                    tp3 = entry - risk * 1.8
+                    tp4 = entry - risk * 2.5
+                    tp5 = entry - risk * 3.5
                     
-                    note = f"R/R: Entry near {entry:.5f}, SL at {sl:.5f}, TP1 at 1.2R"
+                    note = f"R/R: Entry near {entry:.5f}, SL at {sl:.5f}, TP2 at 1.1R"
                     return note, True, entry, sl, tp1, tp2, tp3, tp4, tp5
 
     entry = current
     if direction == "bullish":
-        sl = entry - atr * 1.0
+        if structure_sl is not None:
+            sl = min(entry - atr * 1.5, structure_sl - atr * 0.4)
+        else:
+            sl = entry - atr * 1.5
         risk = entry - sl
-        tp1 = entry + risk * 1.2
-        tp2 = entry + risk * 2.0
-        tp3 = entry + risk * 3.0
-        tp4 = entry + risk * 4.5
-        tp5 = entry + risk * 6.0
+        tp1 = entry + risk * 0.6
+        tp2 = entry + risk * 1.1
+        tp3 = entry + risk * 1.8
+        tp4 = entry + risk * 2.5
+        tp5 = entry + risk * 3.5
     else:
-        sl = entry + atr * 1.0
+        if structure_sl is not None:
+            sl = max(entry + atr * 1.5, structure_sl + atr * 0.4)
+        else:
+            sl = entry + atr * 1.5
         risk = sl - entry
-        tp1 = entry - risk * 1.2
-        tp2 = entry - risk * 2.0
-        tp3 = entry - risk * 3.0
-        tp4 = entry - risk * 4.5
-        tp5 = entry - risk * 6.0
+        tp1 = entry - risk * 0.6
+        tp2 = entry - risk * 1.1
+        tp3 = entry - risk * 1.8
+        tp4 = entry - risk * 2.5
+        tp5 = entry - risk * 3.5
 
-    note = f"R/R: ATR-based levels, TP1 at 1.2R"
+    note = f"R/R: ATR+structure levels, TP2 at 1.1R"
     return note, True, entry, sl, tp1, tp2, tp3, tp4, tp5
 
 
