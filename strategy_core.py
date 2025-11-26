@@ -408,9 +408,7 @@ def _fib_context(
         
         if span <= 0:
             return "Fib: Invalid swing range", False
-    except Exception as e:
-        return f"Fib: Error calculating ({type(e).__name__})", False
-    
+        
         if direction == "bullish":
             fib_382 = hi - span * 0.382
             fib_500 = hi - span * 0.5
@@ -437,6 +435,8 @@ def _fib_context(
                 return "Fib: Price at 50-61.8% zone", True
             else:
                 return "Fib: Price outside retracement zone", False
+    except Exception as e:
+        return f"Fib: Error calculating ({type(e).__name__})", False
 
 
 def _find_last_swing_leg_for_fib(candles: List[Dict], direction: str) -> Optional[Tuple[float, float]]:
@@ -503,7 +503,7 @@ def _daily_liquidity_context(candles: List[Dict], price: float) -> Tuple[str, bo
         
         atr = _atr(candles, 14)
         tolerance = atr * 0.2 if atr > 0 else (max(recent_highs) - min(recent_lows)) * 0.02
-    
+        
         for i, h in enumerate(recent_highs):
             for j, h2 in enumerate(recent_highs):
                 if i != j and abs(h - h2) < tolerance:
