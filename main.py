@@ -443,42 +443,46 @@ async def trade(interaction: discord.Interaction):
 @bot.tree.command(name="live", description="Show latest prices for all assets.")
 async def live(interaction: discord.Interaction):
     await interaction.response.defer()
-    groups = {
-        "Forex": FOREX_PAIRS,
-        "Metals": METALS,
-        "Indices": INDICES,
-        "Energies": ENERGIES,
-        "Crypto": CRYPTO_ASSETS,
-    }
+    try:
+        groups = {
+            "Forex": FOREX_PAIRS,
+            "Metals": METALS,
+            "Indices": INDICES,
+            "Energies": ENERGIES,
+            "Crypto": CRYPTO_ASSETS,
+        }
 
-    lines: list[str] = []
-    lines.append("**Live Prices (Real-time)**")
-    lines.append("")
-
-    for name, symbols in groups.items():
-        lines.append(f"**{name}**")
-        if not symbols:
-            lines.append("_No instruments configured._")
-            lines.append("")
-            continue
-
-        prices = get_current_prices(symbols)
-        
-        for sym in symbols:
-            if sym in prices:
-                mid = prices[sym]["mid"]
-                bid = prices[sym]["bid"]
-                ask = prices[sym]["ask"]
-                lines.append(f"{sym}: `{mid:.5f}` (bid: {bid:.5f}, ask: {ask:.5f})")
-            else:
-                lines.append(f"{sym}: N/A")
+        lines: list[str] = []
+        lines.append("**Live Prices (Real-time)**")
         lines.append("")
 
-    msg = "\n".join(lines)
-    chunks = split_message(msg, limit=1900)
+        for name, symbols in groups.items():
+            lines.append(f"**{name}**")
+            if not symbols:
+                lines.append("_No instruments configured._")
+                lines.append("")
+                continue
 
-    for chunk in chunks:
-        await interaction.followup.send(chunk)
+            prices = get_current_prices(symbols)
+            
+            for sym in symbols:
+                if sym in prices:
+                    mid = prices[sym]["mid"]
+                    bid = prices[sym]["bid"]
+                    ask = prices[sym]["ask"]
+                    lines.append(f"{sym}: `{mid:.5f}` (bid: {bid:.5f}, ask: {ask:.5f})")
+                else:
+                    lines.append(f"{sym}: N/A")
+            lines.append("")
+
+        msg = "\n".join(lines)
+        chunks = split_message(msg, limit=1900)
+
+        for chunk in chunks:
+            await interaction.followup.send(chunk)
+    except Exception as e:
+        print(f"[/live] Error: {e}")
+        await interaction.followup.send(f"Error fetching live prices: {str(e)}")
 
 
 @bot.tree.command(name="backtest", description='Backtest the strategy. Example: /backtest EUR_USD "Jan 2024 - Dec 2024"')
