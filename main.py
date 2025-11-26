@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -463,7 +464,7 @@ async def live(interaction: discord.Interaction):
                 lines.append("")
                 continue
 
-            prices = get_current_prices(symbols)
+            prices = await asyncio.to_thread(get_current_prices, symbols)
             
             for sym in symbols:
                 if sym in prices:
@@ -530,7 +531,7 @@ async def autoscan_loop():
         print("Scan channel not found.")
         return
 
-    markets = scan_all_markets()
+    markets = await asyncio.to_thread(scan_all_markets)
 
     messages = format_autoscan_output(markets)
     for msg in messages:
