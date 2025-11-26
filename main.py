@@ -47,7 +47,7 @@ from position_sizing import calculate_position_size_5ers
 from config import ACCOUNT_SIZE, RISK_PER_TRADE_PCT
 
 from backtest import run_backtest
-from data import get_ohlcv, get_cache_stats, clear_cache
+from data import get_ohlcv, get_cache_stats, clear_cache, get_current_prices
 
 
 ACTIVE_TRADES: dict[str, ScanResult] = {}
