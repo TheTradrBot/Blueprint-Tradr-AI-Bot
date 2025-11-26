@@ -332,12 +332,14 @@ def _location_context(
     direction: str,
 ) -> Tuple[str, bool]:
     """
-    Location is where we enforce Blueprint's polarity:
-    - Shorts should come from resistance / supply (upper side).
-    - Longs should come from support / demand (lower side).
+    Location check for Blueprint strategy:
+    - Price should be near HTF S/R levels or supply/demand zones
+    - For longs: prefer lower/support areas
+    - For shorts: prefer upper/resistance areas
+    - More flexible than strict polarity to catch valid retracement entries
     """
     notes: List[str] = []
-    ok_flags: List[bool] = []
+    location_score = 0  # Track how many location criteria are met
 
     zone_type = "supply" if direction == "bearish" else "demand"
 
@@ -345,7 +347,7 @@ def _location_context(
     (mn_low, mn_high), mn_note, mn_edge = _range_position(monthly_candles, price)
     notes.append(f"Monthly: {mn_note}.")
     if mn_edge:
-        ok_flags.append(True)
+        location_score += 2  # HTF edge is very important
 
     mn_levels = _build_sr_levels(monthly_candles) if monthly_candles else []
     mn_near = _nearest_sr_level(mn_levels, price)
@@ -354,8 +356,10 @@ def _location_context(
             f"Monthly: nearest Tier {mn_near['tier']} S/R around {mn_near['price']:.5f} "
             f"(≈{mn_near['taps']} taps, dist≈{mn_near['dist_pct']:.2f}%)."
         )
-        if mn_near["dist_pct"] <= 0.30:
-            ok_flags.append(True)
+        if mn_near["dist_pct"] <= 1.0:  # Within 1% of monthly S/R
+            location_score += 2
+        elif mn_near["dist_pct"] <= 2.0:  # Within 2% of monthly S/R
+            location_score += 1
 
     mn_zone = _approx_near_zone(monthly_candles, price, zone_type, lookback=120)
     if mn_zone:
@@ -365,14 +369,14 @@ def _location_context(
             f"Monthly: current price {side} {zone_type} zone around [{z_low:.5f}–{z_high:.5f}] "
             f"(dist≈{z_dist:.2f}%)."
         )
-        if z_dist <= 0.75:
-            ok_flags.append(True)
+        if z_dist <= 1.5:
+            location_score += 1
 
     # === Weekly ===
     (wk_low, wk_high), wk_note, wk_edge = _range_position(weekly_candles, price)
     notes.append(f"Weekly: {wk_note}.")
     if wk_edge:
-        ok_flags.append(True)
+        location_score += 2
 
     wk_levels = _build_sr_levels(weekly_candles) if weekly_candles else []
     wk_near = _nearest_sr_level(wk_levels, price)
@@ -381,8 +385,10 @@ def _location_context(
             f"Weekly: nearest Tier {wk_near['tier']} S/R around {wk_near['price']:.5f} "
             f"(≈{wk_near['taps']} taps, dist≈{wk_near['dist_pct']:.2f}%)."
         )
-        if wk_near["dist_pct"] <= 0.30:
-            ok_flags.append(True)
+        if wk_near["dist_pct"] <= 0.75:  # Within 0.75% of weekly S/R
+            location_score += 2
+        elif wk_near["dist_pct"] <= 1.5:
+            location_score += 1
 
     wk_zone = _approx_near_zone(weekly_candles, price, zone_type, lookback=160)
     if wk_zone:
@@ -392,28 +398,35 @@ def _location_context(
             f"Weekly: current price {side} {zone_type} zone around [{z_low:.5f}–{z_high:.5f}] "
             f"(dist≈{z_dist:.2f}%)."
         )
-        if z_dist <= 0.75:
-            ok_flags.append(True)
+        if z_dist <= 1.5:
+            location_score += 1
 
     # === Daily ===
-    support_side = False
-    resistance_side = False
-
     (d_low, d_high), d_note, d_edge = _range_position(daily_candles, price)
     notes.append(f"Daily: {d_note}.")
 
-    # Decide if we're on support or resistance *side* of the daily range
+    # Track position relative to daily range for directional context
     if d_low == d_low and d_high == d_high:  # not NaN
         mid = (d_low + d_high) / 2.0
-        if price > mid:
-            notes.append("Daily: price in upper half of range, acting as resistance region.")
-            resistance_side = True
+        range_pct = (price - d_low) / (d_high - d_low) if (d_high - d_low) > 0 else 0.5
+        
+        if direction == "bullish":
+            # For longs, we want to be in lower portion (retracement)
+            if range_pct <= 0.4:
+                notes.append("Daily: price in lower portion of range, favorable for long entry.")
+                location_score += 1
+            elif range_pct <= 0.55:
+                notes.append("Daily: price near middle of range.")
         else:
-            notes.append("Daily: price in lower half of range, acting as support region.")
-            support_side = True
+            # For shorts, we want to be in upper portion
+            if range_pct >= 0.6:
+                notes.append("Daily: price in upper portion of range, favorable for short entry.")
+                location_score += 1
+            elif range_pct >= 0.45:
+                notes.append("Daily: price near middle of range.")
 
     if d_edge:
-        ok_flags.append(True)
+        location_score += 1
 
     d_levels = _build_sr_levels(daily_candles) if daily_candles else []
     d_near = _nearest_sr_level(d_levels, price)
@@ -422,8 +435,8 @@ def _location_context(
             f"Daily: nearest Tier {d_near['tier']} S/R around {d_near['price']:.5f} "
             f"(≈{d_near['taps']} taps, dist≈{d_near['dist_pct']:.2f}%)."
         )
-        if d_near["dist_pct"] <= 0.30:
-            ok_flags.append(True)
+        if d_near["dist_pct"] <= 0.5:
+            location_score += 1
 
     d_zone = _approx_near_zone(daily_candles, price, zone_type, lookback=120)
     if d_zone:
@@ -433,25 +446,18 @@ def _location_context(
             f"Daily: current price {side} {zone_type} zone around [{z_low:.5f}–{z_high:.5f}] "
             f"(dist≈{z_dist:.2f}%)."
         )
-        if z_dist <= 0.75:
-            ok_flags.append(True)
+        if z_dist <= 1.0:
+            location_score += 1
 
-    # === Directional filter (Blueprint polarity) ===
-    has_zone = any(z is not None for z in (mn_zone, wk_zone, d_zone))
-
-    directional_ok = False
-    if direction == "bullish":
-        # Longs: only like it when we are on support side (lower half)
-        # and anchored by edge / HTF edges / demand zones.
-        if support_side and (d_edge or mn_edge or wk_edge or has_zone):
-            directional_ok = True
-    elif direction == "bearish":
-        # Shorts: only like it when we are on resistance side (upper half)
-        # and anchored by edge / HTF edges / supply zones.
-        if resistance_side and (d_edge or mn_edge or wk_edge or has_zone):
-            directional_ok = True
-
-    ok = directional_ok
+    # Location is OK if we have reasonable confluence of location factors
+    # Threshold of 2 means at least one significant HTF factor
+    ok = location_score >= 2
+    
+    if ok:
+        notes.append(f"Location confluence score: {location_score} (sufficient).")
+    else:
+        notes.append(f"Location confluence score: {location_score} (insufficient, need ≥2).")
+    
     return " ".join(notes), ok
 
 
@@ -496,34 +502,50 @@ def _fib_context(
     price: float,
 ) -> Tuple[str, bool]:
     """
-    Fibonacci logic on WEEKLY & DAILY only, as per Blueprint:
+    Fibonacci logic on WEEKLY & DAILY as per Blueprint:
     - Use meaningful impulse legs (body->wick approximation via pivots).
-    - Compute golden pockets on Weekly and Daily.
-    - Fib confluence = True if price is in at least one golden pocket.
+    - Compute golden pockets (0.618-0.796) and extended zones (0.5-0.85).
+    - Fib confluence = True if price is in or near retracement zones.
     """
     notes: List[str] = []
-    fib_ok = False
+    fib_score = 0
 
     # --- Weekly leg ---
     weekly_leg = _find_last_swing_leg_for_fib(weekly_candles, direction) if weekly_candles else None
     if weekly_leg:
         w_low, w_high = weekly_leg
+        span = w_high - w_low
+        
         if direction == "bullish":
-            w_gp_low = w_low + (w_high - w_low) * 0.618
-            w_gp_high = w_low + (w_high - w_low) * 0.796
+            # For bullish, retracement goes down from high
+            w_gp_low = w_low + span * 0.618
+            w_gp_high = w_low + span * 0.796
+            # Extended zone (50% - 85% retracement)
+            w_ext_low = w_low + span * 0.50
+            w_ext_high = w_low + span * 0.85
         else:
-            w_gp_low = w_high - (w_high - w_low) * 0.796
-            w_gp_high = w_high - (w_high - w_low) * 0.618
+            # For bearish, retracement goes up from low
+            w_gp_low = w_high - span * 0.796
+            w_gp_high = w_high - span * 0.618
+            w_ext_low = w_high - span * 0.85
+            w_ext_high = w_high - span * 0.50
 
         w_in_gp = w_gp_low <= price <= w_gp_high
+        w_in_ext = w_ext_low <= price <= w_ext_high
+        
         if w_in_gp:
             notes.append(
                 f"Weekly: price inside golden pocket ({w_gp_low:.5f}–{w_gp_high:.5f}) of last impulse leg."
             )
-            fib_ok = True
+            fib_score += 3  # Strong fib confluence
+        elif w_in_ext:
+            notes.append(
+                f"Weekly: price in extended retracement zone ({w_ext_low:.5f}–{w_ext_high:.5f}) of last impulse leg."
+            )
+            fib_score += 2  # Moderate fib confluence
         else:
             notes.append(
-                f"Weekly: price outside golden pocket ({w_gp_low:.5f}–{w_gp_high:.5f}) of last impulse leg "
+                f"Weekly: price outside retracement zone ({w_ext_low:.5f}–{w_ext_high:.5f}) of last impulse leg "
                 f"(current={price:.5f})."
             )
     else:
@@ -533,22 +555,35 @@ def _fib_context(
     daily_leg = _find_last_swing_leg_for_fib(daily_candles, direction) if daily_candles else None
     if daily_leg:
         d_low, d_high = daily_leg
+        span = d_high - d_low
+        
         if direction == "bullish":
-            d_gp_low = d_low + (d_high - d_low) * 0.618
-            d_gp_high = d_low + (d_high - d_low) * 0.796
+            d_gp_low = d_low + span * 0.618
+            d_gp_high = d_low + span * 0.796
+            d_ext_low = d_low + span * 0.50
+            d_ext_high = d_low + span * 0.85
         else:
-            d_gp_low = d_high - (d_high - d_low) * 0.796
-            d_gp_high = d_high - (d_high - d_low) * 0.618
+            d_gp_low = d_high - span * 0.796
+            d_gp_high = d_high - span * 0.618
+            d_ext_low = d_high - span * 0.85
+            d_ext_high = d_high - span * 0.50
 
         d_in_gp = d_gp_low <= price <= d_gp_high
+        d_in_ext = d_ext_low <= price <= d_ext_high
+        
         if d_in_gp:
             notes.append(
                 f"Daily: price inside golden pocket ({d_gp_low:.5f}–{d_gp_high:.5f}) of last impulse leg."
             )
-            fib_ok = True
+            fib_score += 3
+        elif d_in_ext:
+            notes.append(
+                f"Daily: price in extended retracement zone ({d_ext_low:.5f}–{d_ext_high:.5f}) of last impulse leg."
+            )
+            fib_score += 2
         else:
             notes.append(
-                f"Daily: price outside golden pocket ({d_gp_low:.5f}–{d_gp_high:.5f}) of last impulse leg "
+                f"Daily: price outside retracement zone ({d_ext_low:.5f}–{d_ext_high:.5f}) of last impulse leg "
                 f"(current={price:.5f})."
             )
     else:
@@ -557,6 +592,14 @@ def _fib_context(
     # If neither leg exists → no Fib confluence.
     if not weekly_leg and not daily_leg:
         return "Weekly/Daily: no clear impulse legs for Fibonacci (skipping Fib confluence).", False
+
+    # Fib OK if we have at least some retracement confluence
+    fib_ok = fib_score >= 2
+    
+    if fib_ok:
+        notes.append(f"Fib confluence score: {fib_score} (sufficient).")
+    else:
+        notes.append(f"Fib confluence score: {fib_score} (insufficient, need ≥2).")
 
     return " ".join(notes), fib_ok
 
@@ -906,55 +949,212 @@ def _structure_context(
     return structure_ok, " ".join(parts)
 
 
+def _daily_confirmation_fallback(
+    daily_candles: List[Dict],
+    direction: str,
+) -> Tuple[str, bool]:
+    """
+    Fallback confirmation using Daily candles when H4 data is not available.
+    Uses similar logic to H4 confirmation but on Daily timeframe.
+    """
+    if not daily_candles or len(daily_candles) < 20:
+        return "Daily fallback: not enough data for confirmation.", False
+
+    swing_highs, swing_lows = _find_swings(daily_candles, left=2, right=2)
+    
+    notes: List[str] = []
+    confirmation_score = 0
+    
+    if direction == "bearish":
+        # Check for BOS down (break below swing low)
+        if swing_lows and len(swing_lows) >= 1:
+            relevant_swing_lows = [idx for idx in swing_lows if idx < len(daily_candles) - 2]
+            if relevant_swing_lows:
+                key_idx = relevant_swing_lows[-1]
+                key_level = daily_candles[key_idx]["low"]
+                
+                for i in range(1, min(4, len(daily_candles))):
+                    if daily_candles[-i]["close"] < key_level:
+                        notes.append(f"Daily: BOS down confirmed – close below swing low {key_level:.5f}.")
+                        confirmation_score += 3
+                        break
+        
+        # Check for bearish momentum candle
+        for i in range(1, min(3, len(daily_candles))):
+            candle = daily_candles[-i]
+            body = candle["open"] - candle["close"]
+            total_range = candle["high"] - candle["low"]
+            if total_range > 0 and body > 0:
+                body_ratio = body / total_range
+                if body_ratio >= 0.55:
+                    notes.append(f"Daily: bearish momentum candle detected (body ratio {body_ratio:.1%}).")
+                    confirmation_score += 2
+                    break
+        
+        # Check for bearish engulfing
+        if len(daily_candles) >= 2:
+            curr = daily_candles[-1]
+            prev = daily_candles[-2]
+            if curr["close"] < curr["open"] and prev["close"] > prev["open"]:
+                if curr["open"] >= prev["close"] and curr["close"] <= prev["open"]:
+                    notes.append("Daily: bearish engulfing pattern detected.")
+                    confirmation_score += 2
+        
+    else:  # bullish
+        # Check for BOS up (break above swing high)
+        if swing_highs and len(swing_highs) >= 1:
+            relevant_swing_highs = [idx for idx in swing_highs if idx < len(daily_candles) - 2]
+            if relevant_swing_highs:
+                key_idx = relevant_swing_highs[-1]
+                key_level = daily_candles[key_idx]["high"]
+                
+                for i in range(1, min(4, len(daily_candles))):
+                    if daily_candles[-i]["close"] > key_level:
+                        notes.append(f"Daily: BOS up confirmed – close above swing high {key_level:.5f}.")
+                        confirmation_score += 3
+                        break
+        
+        # Check for bullish momentum candle
+        for i in range(1, min(3, len(daily_candles))):
+            candle = daily_candles[-i]
+            body = candle["close"] - candle["open"]
+            total_range = candle["high"] - candle["low"]
+            if total_range > 0 and body > 0:
+                body_ratio = body / total_range
+                if body_ratio >= 0.55:
+                    notes.append(f"Daily: bullish momentum candle detected (body ratio {body_ratio:.1%}).")
+                    confirmation_score += 2
+                    break
+        
+        # Check for bullish engulfing
+        if len(daily_candles) >= 2:
+            curr = daily_candles[-1]
+            prev = daily_candles[-2]
+            if curr["close"] > curr["open"] and prev["close"] < prev["open"]:
+                if curr["open"] <= prev["close"] and curr["close"] >= prev["open"]:
+                    notes.append("Daily: bullish engulfing pattern detected.")
+                    confirmation_score += 2
+    
+    confirmed = confirmation_score >= 2
+    
+    if confirmed:
+        notes.append(f"Daily confirmation score: {confirmation_score} (sufficient, using Daily fallback).")
+    else:
+        notes.append(f"Daily confirmation score: {confirmation_score} (insufficient, need ≥2).")
+    
+    return " ".join(notes) if notes else "Daily fallback: no clear confirmation signals.", confirmed
+
+
 def _h4_confirmation(
     h4_candles: List[Dict],
     direction: str,
+    daily_candles: List[Dict] = None,
 ) -> Tuple[str, bool]:
     """
     4H confirmation approximation in Blueprint terms:
     - We want a BOS (break of structure) in the trade direction.
     - For shorts: recent close below a meaningful swing low.
     - For longs: recent close above a meaningful swing high.
+    - Also checks for momentum candles and engulfing patterns.
+    - Falls back to Daily data if H4 is not available.
     """
-    if not h4_candles or len(h4_candles) < 30:
+    # Fallback to Daily data if H4 is not available
+    if not h4_candles or len(h4_candles) < 20:
+        if daily_candles and len(daily_candles) >= 20:
+            return _daily_confirmation_fallback(daily_candles, direction)
         return "4H: not enough data for confirmation.", False
 
     swing_highs, swing_lows = _find_swings(h4_candles, left=2, right=2)
-    closes = [c["close"] for c in h4_candles]
-
+    
+    # Check recent candles for confirmation (last 5-10 candles)
+    lookback = min(10, len(h4_candles) - 1)
+    recent_candles = h4_candles[-lookback:]
+    
+    notes: List[str] = []
+    confirmation_score = 0
+    
     if direction == "bearish":
-        if not swing_lows:
-            return "4H: no clear swing lows to confirm BOS down.", False
-        key_idx = swing_lows[-1]
-        key_level = h4_candles[key_idx]["low"]
-        last_close = closes[-1]
-        if last_close < key_level:
-            return (
-                f"4H confirmation: BOS in bearish direction – recent 4H close below key swing low around {key_level:.5f}.",
-                True,
-            )
-        else:
-            return (
-                f"4H: no BOS down – no recent 4H close below key swing low around {key_level:.5f}.",
-                False,
-            )
-
+        # Check for BOS down (break below swing low)
+        if swing_lows and len(swing_lows) >= 1:
+            # Get swing lows from the lookback period
+            relevant_swing_lows = [idx for idx in swing_lows if idx < len(h4_candles) - 3]
+            if relevant_swing_lows:
+                key_idx = relevant_swing_lows[-1]
+                key_level = h4_candles[key_idx]["low"]
+                
+                # Check if any recent close is below this swing low
+                for i in range(1, min(6, len(h4_candles))):
+                    if h4_candles[-i]["close"] < key_level:
+                        notes.append(f"4H: BOS down confirmed – close below swing low {key_level:.5f}.")
+                        confirmation_score += 3
+                        break
+        
+        # Check for bearish momentum candle
+        for i in range(1, min(4, len(h4_candles))):
+            candle = h4_candles[-i]
+            body = candle["open"] - candle["close"]
+            total_range = candle["high"] - candle["low"]
+            if total_range > 0 and body > 0:  # Bearish candle
+                body_ratio = body / total_range
+                if body_ratio >= 0.6:  # Strong bearish body
+                    notes.append(f"4H: strong bearish candle detected (body ratio {body_ratio:.1%}).")
+                    confirmation_score += 2
+                    break
+        
+        # Check for bearish engulfing
+        if len(h4_candles) >= 2:
+            curr = h4_candles[-1]
+            prev = h4_candles[-2]
+            if curr["close"] < curr["open"] and prev["close"] > prev["open"]:  # curr bearish, prev bullish
+                if curr["open"] >= prev["close"] and curr["close"] <= prev["open"]:
+                    notes.append("4H: bearish engulfing pattern detected.")
+                    confirmation_score += 2
+        
     else:  # bullish
-        if not swing_highs:
-            return "4H: no clear swing highs to confirm BOS up.", False
-        key_idx = swing_highs[-1]
-        key_level = h4_candles[key_idx]["high"]
-        last_close = closes[-1]
-        if last_close > key_level:
-            return (
-                f"4H confirmation: BOS in bullish direction – recent 4H close above key swing high around {key_level:.5f}.",
-                True,
-            )
-        else:
-            return (
-                f"4H: no BOS up – no recent 4H close above key swing high around {key_level:.5f}.",
-                False,
-            )
+        # Check for BOS up (break above swing high)
+        if swing_highs and len(swing_highs) >= 1:
+            relevant_swing_highs = [idx for idx in swing_highs if idx < len(h4_candles) - 3]
+            if relevant_swing_highs:
+                key_idx = relevant_swing_highs[-1]
+                key_level = h4_candles[key_idx]["high"]
+                
+                # Check if any recent close is above this swing high
+                for i in range(1, min(6, len(h4_candles))):
+                    if h4_candles[-i]["close"] > key_level:
+                        notes.append(f"4H: BOS up confirmed – close above swing high {key_level:.5f}.")
+                        confirmation_score += 3
+                        break
+        
+        # Check for bullish momentum candle
+        for i in range(1, min(4, len(h4_candles))):
+            candle = h4_candles[-i]
+            body = candle["close"] - candle["open"]
+            total_range = candle["high"] - candle["low"]
+            if total_range > 0 and body > 0:  # Bullish candle
+                body_ratio = body / total_range
+                if body_ratio >= 0.6:  # Strong bullish body
+                    notes.append(f"4H: strong bullish candle detected (body ratio {body_ratio:.1%}).")
+                    confirmation_score += 2
+                    break
+        
+        # Check for bullish engulfing
+        if len(h4_candles) >= 2:
+            curr = h4_candles[-1]
+            prev = h4_candles[-2]
+            if curr["close"] > curr["open"] and prev["close"] < prev["open"]:  # curr bullish, prev bearish
+                if curr["open"] <= prev["close"] and curr["close"] >= prev["open"]:
+                    notes.append("4H: bullish engulfing pattern detected.")
+                    confirmation_score += 2
+    
+    # Confirmation is OK if we have enough signals
+    confirmed = confirmation_score >= 2
+    
+    if confirmed:
+        notes.append(f"4H confirmation score: {confirmation_score} (sufficient).")
+    else:
+        notes.append(f"4H confirmation score: {confirmation_score} (insufficient, need ≥2).")
+    
+    return " ".join(notes) if notes else "4H: no clear confirmation signals.", confirmed
 
 
 def _atr(candles: List[Dict], period: int = 14) -> float:
@@ -1185,8 +1385,8 @@ def _compute_confluence_flags(
         monthly_candles, weekly_candles, daily_candles, direction
     )
 
-    # 6) 4H confirmation
-    conf_note, conf_ok = _h4_confirmation(h4_candles, direction)
+    # 6) 4H confirmation (with Daily fallback if H4 not available)
+    conf_note, conf_ok = _h4_confirmation(h4_candles, direction, daily_candles)
 
     # 7) R/R & trade levels
     (
@@ -1254,11 +1454,16 @@ def scan_single_asset(symbol: str) -> Optional[ScanResult]:
 
     confluence_score = sum(1 for v in flags.values() if v)
 
-    min_trade_conf = 5 if SIGNAL_MODE == "standard" else 4
+    # Confluence thresholds based on strategy mode
+    # Standard mode: need 4+ confluence factors
+    # Aggressive mode: need 3+ confluence factors
+    min_trade_conf = 4 if SIGNAL_MODE == "standard" else 3
 
+    # Active: Need confirmation + R/R + enough confluence
+    # In-progress: Good setup waiting for 4H confirmation
     if flags["confirmation"] and confluence_score >= min_trade_conf and flags["rr"]:
         status = "active"
-    elif confluence_score >= min_trade_conf - 1 and flags["location"] and flags["fib"] and flags["liquidity"]:
+    elif confluence_score >= min_trade_conf - 1 and flags["location"] and (flags["fib"] or flags["liquidity"]):
         status = "in_progress"
     else:
         status = "scan_only"

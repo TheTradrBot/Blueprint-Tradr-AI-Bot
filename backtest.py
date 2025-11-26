@@ -380,7 +380,10 @@ def run_backtest(asset: str, period: str) -> Dict:
     trades: List[Dict] = []
     open_trade: Optional[Dict] = None
 
-    min_trade_conf = 5 if SIGNAL_MODE == "standard" else 4
+    # Confluence thresholds based on strategy mode
+    # Standard mode: need 4+ confluence factors
+    # Aggressive mode: need 3+ confluence factors
+    min_trade_conf = 4 if SIGNAL_MODE == "standard" else 3
 
     # 4) Main backtest loop (one pass through selected Daily indices)
     for idx in indices:
@@ -447,13 +450,15 @@ def run_backtest(asset: str, period: str) -> Dict:
 
         confluence_score = sum(1 for v in flags.values() if v)
 
-        if flags.get("confirmation") and confluence_score >= min_trade_conf + 1 and flags.get("rr"):
+        # Determine trade status based on confluence
+        # Active: Need confirmation + R/R + enough confluence
+        # In-progress: Good setup waiting for 4H confirmation
+        if flags.get("confirmation") and confluence_score >= min_trade_conf and flags.get("rr"):
             status = "active"
         elif (
-            confluence_score >= min_trade_conf
+            confluence_score >= min_trade_conf - 1
             and flags.get("location")
-            and flags.get("fib")
-            and flags.get("liquidity")
+            and (flags.get("fib") or flags.get("liquidity"))
         ):
             status = "in_progress"
         else:
