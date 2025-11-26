@@ -1,76 +1,278 @@
+"""
+Enhanced Discord formatting for Blueprint Trader AI.
+
+Provides clean, comprehensive output for scan results with:
+- Bullish/Bearish/Neutral status
+- Confluence scores
+- Setup types and what to look for
+- Trade levels when available
+"""
+
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 from strategy import ScanResult
 
 
-def _yes_no_from_text(ok_text: str, note: str) -> str:
+def format_scan_summary(results: List[ScanResult]) -> str:
     """
-    Helper to decide Y/N flags based on note text.
-    We keep it simple + robust: just check for key phrases.
+    Format a list of scan results into a compact summary.
+    Shows: Symbol | Direction | Confluence | Status | Key flags
     """
-    return "Y" if ok_text in note else "N"
+    if not results:
+        return "No setups found."
+
+    results = sorted(results, key=lambda r: (-r.confluence_score, r.symbol))
+    
+    lines: List[str] = []
+    
+    for res in results:
+        direction_emoji = "🟢" if res.direction == "bullish" else "🔴" if res.direction == "bearish" else "⚪"
+        
+        status_tag = ""
+        if res.status == "active":
+            status_tag = "✅ ACTIVE"
+        elif res.status == "in_progress":
+            status_tag = "🕐 WATCHING"
+        else:
+            status_tag = "📊 SCAN"
+        
+        flags = []
+        if "Y" in res.summary_reason.split("HTF=")[1][:1] if "HTF=" in res.summary_reason else False:
+            flags.append("HTF")
+        if "Y" in res.summary_reason.split("Loc=")[1][:1] if "Loc=" in res.summary_reason else False:
+            flags.append("Loc")
+        if "Y" in res.summary_reason.split("Fib=")[1][:1] if "Fib=" in res.summary_reason else False:
+            flags.append("Fib")
+        if "Y" in res.summary_reason.split("Liq=")[1][:1] if "Liq=" in res.summary_reason else False:
+            flags.append("Liq")
+        
+        flag_str = ", ".join(flags) if flags else "-"
+        
+        line = f"{direction_emoji} **{res.symbol}** | {res.direction.upper()} | {res.confluence_score}/7 | {status_tag}"
+        lines.append(line)
+    
+    return "\n".join(lines)
 
 
 def format_scan_group(group_name: str, results: List[ScanResult]) -> str:
     """
-    Format a group of ScanResult objects into a compact multi-line summary
-    that still shows the full 7 Blueprint pillars:
-
-    - htf  = HTF bias
-    - loc  = Location (S/R + supply/demand, top/bottom of range)
-    - fib  = Weekly/Daily golden pocket
-    - liq  = Liquidity (external pool, equal highs/lows, sweeps)
-    - struct = Weekly/Daily structure + Daily frameworks
-    - 4H   = 4H confirmation (BOS / continuation)
-    - rr   = R/R quality + TP1–TP5 structure
+    Format a group of scan results with header.
+    Shows compact view for multiple instruments.
     """
     if not results:
-        return f"📊 {group_name} scan\n_No instruments to show._"
+        return f"📊 **{group_name}**\n_No setups found._"
 
-    # Sort by symbol for stable ordering
-    results = sorted(results, key=lambda r: r.symbol)
+    results = sorted(results, key=lambda r: (-r.confluence_score, r.symbol))
 
     lines: List[str] = []
-    lines.append(f"📊 {group_name} scan")
-
+    lines.append(f"📊 **{group_name} Scan**")
+    lines.append("")
+    
+    active_count = sum(1 for r in results if r.status == "active")
+    watching_count = sum(1 for r in results if r.status == "in_progress")
+    
+    if active_count > 0 or watching_count > 0:
+        lines.append(f"🎯 {active_count} active | 🕐 {watching_count} watching")
+        lines.append("")
+    
     for res in results:
-        status_tag = (
-            "ACTIVE" if res.status == "active"
-            else "INP" if res.status == "in_progress"
-            else "SCAN"
+        direction_emoji = "🟢" if res.direction == "bullish" else "🔴"
+        
+        if res.status == "active":
+            status = "✅"
+        elif res.status == "in_progress":
+            status = "🕐"
+        else:
+            status = "📊"
+        
+        htf = "✓" if "HTF trend alignment" in res.htf_bias or "HTF reversal" in res.htf_bias else "○"
+        loc = "✓" if "score:" in res.location_note and int(res.location_note.split("score:")[1].split()[0]) >= 2 else "○"
+        fib = "✓" if "retracement zone" in res.fib_note else "○"
+        liq = "✓" if "sweep" in res.liquidity_note.lower() or "equal" in res.liquidity_note.lower() else "○"
+        struct = "✓" if "bullish" in res.structure_note.lower() or "bearish" in res.structure_note.lower() else "○"
+        conf = "✓" if "confirmed" in res.confirmation_note.lower() else "○"
+        
+        line = (
+            f"{status} {direction_emoji} **{res.symbol}** "
+            f"| {res.confluence_score}/7 "
+            f"| HTF:{htf} Loc:{loc} Fib:{fib} Liq:{liq} Str:{struct} 4H:{conf}"
         )
-
-        # Infer flags from the rich notes
-        htf_flag = "Y" if ("HTF trend alignment" in res.htf_bias
-                           or "HTF reversal bias" in res.htf_bias) else "N"
-
-        loc_flag = "Y" if (
-            "price in lower" in res.location_note
-            or "price in upper" in res.location_note
-            or "Tier" in res.location_note
-            or "supply zone" in res.location_note
-            or "demand zone" in res.location_note
-        ) else "N"
-
-        fib_flag = "Y" if "price inside golden pocket" in res.fib_note else "N"
-
-        liq_flag = "Y" if (
-            "liquidity" in res.liquidity_note
-            or "sweep" in res.liquidity_note
-        ) else "N"
-
-        struct_flag = "Y" if "Structure supports" in res.structure_note else "N"
-
-        h4_flag = "Y" if "H4: structure aligned" in res.confirmation_note else "N"
-
-        rr_flag = "Y" if "Approx first target" in res.rr_note else "N"
-
-        lines.append(
-            f"{res.symbol} | {res.direction.upper()} | "
-            f"{res.confluence_score}/7 ({status_tag}) – "
-            f"htf={htf_flag}, loc={loc_flag}, fib={fib_flag}, "
-            f"liq={liq_flag}, struct={struct_flag}, 4H={h4_flag}, rr={rr_flag}"
-        )
-
+        lines.append(line)
+    
     return "\n".join(lines)
+
+
+def format_detailed_scan(res: ScanResult) -> str:
+    """
+    Format a single scan result with full details.
+    Used for /scan command response.
+    """
+    direction_emoji = "🟢" if res.direction == "bullish" else "🔴"
+    
+    if res.status == "active":
+        status_line = "✅ **ACTIVE TRADE** - Entry signal confirmed"
+    elif res.status == "in_progress":
+        status_line = "🕐 **WATCHING** - Setup forming, waiting for confirmation"
+    else:
+        status_line = "📊 **SCAN ONLY** - No actionable setup yet"
+    
+    lines: List[str] = []
+    lines.append(f"{direction_emoji} **{res.symbol}** | {res.direction.upper()}")
+    lines.append(f"Confluence: **{res.confluence_score}/7**")
+    lines.append(status_line)
+    lines.append("")
+    
+    lines.append("**Analysis:**")
+    
+    htf_check = "✅" if "alignment" in res.htf_bias or "reversal" in res.htf_bias else "⚪"
+    lines.append(f"{htf_check} HTF Bias: {_truncate(res.htf_bias, 80)}")
+    
+    loc_check = "✅" if "score:" in res.location_note and int(res.location_note.split("score:")[1].split()[0]) >= 2 else "⚪"
+    lines.append(f"{loc_check} Location: {_truncate(res.location_note, 80)}")
+    
+    fib_check = "✅" if "retracement zone" in res.fib_note else "⚪"
+    lines.append(f"{fib_check} Fibonacci: {_truncate(res.fib_note, 80)}")
+    
+    liq_check = "✅" if "sweep" in res.liquidity_note.lower() or "equal" in res.liquidity_note.lower() else "⚪"
+    lines.append(f"{liq_check} Liquidity: {_truncate(res.liquidity_note, 80)}")
+    
+    struct_check = "✅" if res.structure_note and ("bullish" in res.structure_note.lower() or "bearish" in res.structure_note.lower()) else "⚪"
+    lines.append(f"{struct_check} Structure: {_truncate(res.structure_note, 80)}")
+    
+    conf_check = "✅" if "confirmed" in res.confirmation_note.lower() else "⚪"
+    lines.append(f"{conf_check} Confirmation: {_truncate(res.confirmation_note, 80)}")
+    
+    lines.append("")
+    
+    if res.status == "active" and res.entry is not None:
+        lines.append("**Trade Levels:**")
+        lines.append(f"• Entry: `{res.entry:.5f}`")
+        lines.append(f"• Stop Loss: `{res.stop_loss:.5f}`")
+        if res.tp1:
+            lines.append(f"• TP1: `{res.tp1:.5f}` | TP2: `{res.tp2:.5f}` | TP3: `{res.tp3:.5f}`")
+        lines.append("")
+    
+    if res.setup_type:
+        lines.append(f"**Setup:** {res.setup_type}")
+    
+    if res.what_to_look_for:
+        lines.append(f"**Watch For:** {res.what_to_look_for}")
+    
+    return "\n".join(lines)
+
+
+def format_autoscan_output(markets: dict) -> List[str]:
+    """
+    Format autoscan results for Discord channels.
+    Returns list of message strings.
+    """
+    messages: List[str] = []
+    
+    summary_lines = ["📊 **4H AUTOSCAN COMPLETE**", ""]
+    
+    total_active = 0
+    total_watching = 0
+    
+    for group_name, (scan_results, trade_ideas) in markets.items():
+        if not scan_results:
+            continue
+        
+        active = sum(1 for r in scan_results if r.status == "active")
+        watching = sum(1 for r in scan_results if r.status == "in_progress")
+        total_active += active
+        total_watching += watching
+        
+        status = ""
+        if active > 0:
+            status = f"🎯 {active} active"
+        if watching > 0:
+            status += f" 🕐 {watching} watching" if status else f"🕐 {watching} watching"
+        if not status:
+            status = "No setups"
+        
+        summary_lines.append(f"**{group_name}**: {status}")
+    
+    summary_lines.append("")
+    summary_lines.append(f"**Total**: 🎯 {total_active} active | 🕐 {total_watching} watching")
+    
+    messages.append("\n".join(summary_lines))
+    
+    for group_name, (scan_results, _) in markets.items():
+        active_setups = [r for r in scan_results if r.status == "active"]
+        if active_setups:
+            group_lines = [f"", f"**{group_name} - Active Setups:**"]
+            for res in active_setups:
+                emoji = "🟢" if res.direction == "bullish" else "🔴"
+                group_lines.append(
+                    f"{emoji} **{res.symbol}** {res.direction.upper()} | {res.confluence_score}/7"
+                )
+                if res.entry:
+                    group_lines.append(
+                        f"   Entry: {res.entry:.5f} | SL: {res.stop_loss:.5f}"
+                    )
+            messages.append("\n".join(group_lines))
+    
+    return messages
+
+
+def format_trade_update(symbol: str, direction: str, event_type: str, price: float, level: float) -> str:
+    """Format a trade update message."""
+    emoji = "✅" if event_type.startswith("TP") else "❌"
+    
+    lines = [
+        f"🔔 **Trade Update - {symbol}**",
+        f"Direction: {direction.upper()}",
+        f"{emoji} {event_type} hit at {price:.5f}",
+        f"Level: {level:.5f}"
+    ]
+    
+    return "\n".join(lines)
+
+
+def format_backtest_result(result: dict) -> str:
+    """Format backtest results for Discord."""
+    asset = result.get("asset", "Unknown")
+    period = result.get("period", "Unknown")
+    total = result.get("total_trades", 0)
+    win_rate = result.get("win_rate", 0.0)
+    net_return = result.get("net_return_pct", 0.0)
+    trades = result.get("trades", [])
+    notes = result.get("notes", "")
+    
+    tp1_count = sum(1 for t in trades if t.get("exit_reason") == "TP1")
+    tp2_count = sum(1 for t in trades if t.get("exit_reason") == "TP2")
+    tp3_count = sum(1 for t in trades if t.get("exit_reason") == "TP3")
+    sl_count = sum(1 for t in trades if t.get("exit_reason") == "SL")
+    
+    profit_emoji = "📈" if net_return > 0 else "📉" if net_return < 0 else "➖"
+    wr_emoji = "🎯" if win_rate >= 70 else "📊" if win_rate >= 50 else "⚠️"
+    
+    lines = [
+        f"📊 **Backtest Results - {asset}**",
+        f"Period: {period}",
+        "",
+        f"**Performance:**",
+        f"{profit_emoji} Net Return: **{net_return:+.1f}%** (1% risk/trade)",
+        f"{wr_emoji} Win Rate: **{win_rate:.1f}%** ({total} trades)",
+        "",
+        f"**Exit Breakdown:**",
+        f"• TP1: {tp1_count} | TP2: {tp2_count} | TP3: {tp3_count}",
+        f"• SL: {sl_count}",
+    ]
+    
+    if total > 0:
+        avg_win = sum(t["rr"] for t in trades if t["rr"] > 0) / max(1, sum(1 for t in trades if t["rr"] > 0))
+        avg_loss = abs(sum(t["rr"] for t in trades if t["rr"] < 0) / max(1, sum(1 for t in trades if t["rr"] < 0)))
+        lines.append("")
+        lines.append(f"**Risk Stats:**")
+        lines.append(f"• Avg Win: {avg_win:.1f}R | Avg Loss: {avg_loss:.1f}R")
+    
+    return "\n".join(lines)
+
+
+def _truncate(text: str, max_len: int) -> str:
+    """Truncate text to max length."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len-3] + "..."

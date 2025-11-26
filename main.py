@@ -28,30 +28,21 @@ from strategy import (
 
 from formatting import (
     format_scan_group,
+    format_detailed_scan,
+    format_autoscan_output,
+    format_backtest_result,
 )
 
 from backtest import run_backtest
-from data import get_ohlcv
+from data import get_ohlcv, get_cache_stats, clear_cache
 
 
-# ========= Global trade stores =========
-
-# Trades that are ACTIVE (4H confirmed) and tracked for TP/SL updates.
-# Key: f"{symbol}_{direction}" (e.g. "EUR_USD_bullish")
 ACTIVE_TRADES: dict[str, ScanResult] = {}
-
-# Per-trade progress: which TP(s) or SL have already been hit.
-# TRADE_PROGRESS[trade_key] = {"tp1": bool, ..., "tp5": bool, "sl": bool}
 TRADE_PROGRESS: dict[str, dict[str, bool]] = {}
 
 
-# ========= Helpers =========
-
 def split_message(text: str, limit: int = 1900) -> list[str]:
-    """
-    Split a long message into chunks under Discord's character limit.
-    We split on line breaks to avoid cutting in the middle of words.
-    """
+    """Split a long message into chunks under Discord's character limit."""
     if len(text) <= limit:
         return [text]
 
@@ -76,28 +67,16 @@ def split_message(text: str, limit: int = 1900) -> list[str]:
 
 
 def _ensure_trade_progress(trade_key: str) -> None:
-    """
-    Make sure TRADE_PROGRESS has an entry for this trade key.
-    """
+    """Make sure TRADE_PROGRESS has an entry for this trade key."""
     if trade_key not in TRADE_PROGRESS:
         TRADE_PROGRESS[trade_key] = {
-            "tp1": False,
-            "tp2": False,
-            "tp3": False,
-            "tp4": False,
-            "tp5": False,
-            "sl": False,
+            "tp1": False, "tp2": False, "tp3": False,
+            "tp4": False, "tp5": False, "sl": False,
         }
 
 
 def _compute_trade_progress(idea: ScanResult) -> tuple[float, float]:
-    """
-    Compute (current_price, approx_RR) for a trade idea based on latest daily close.
-
-    RR is measured from entry toward SL:
-    - LONG: (current - entry) / (entry - SL)
-    - SHORT: (entry - current) / (SL - entry)
-    """
+    """Compute (current_price, approx_RR) for a trade idea."""
     candles = get_ohlcv(idea.symbol, timeframe="D", count=1)
     if not candles:
         return float("nan"), float("nan")
@@ -125,17 +104,10 @@ def _compute_trade_progress(idea: ScanResult) -> tuple[float, float]:
 
 
 async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
-    """
-    For every ACTIVE trade:
-      - Check latest H4 (or Daily) price.
-      - Detect TP1–TP5 hits or SL hit.
-      - Send clean updates into TRADE_UPDATES channel.
-      - Remove trade from ACTIVE_TRADES once SL or all TPs are done.
-    """
+    """Check active trades for TP/SL hits and send updates."""
     if not ACTIVE_TRADES:
         return
 
-    # Copy keys because we may remove trades from ACTIVE_TRADES while iterating
     trade_keys = list(ACTIVE_TRADES.keys())
 
     for key in trade_keys:
@@ -143,7 +115,6 @@ async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
         if trade is None:
             continue
 
-        # Get latest 4H price; fallback to Daily if H4 unavailable
         candles = get_ohlcv(trade.symbol, timeframe="H4", count=1)
         if not candles:
             candles = get_ohlcv(trade.symbol, timeframe="D", count=1)
@@ -161,18 +132,16 @@ async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
         events: list[str] = []
         closed = False
 
-        # --- SL check ---
         if sl is not None and not progress["sl"]:
             if direction == "bullish" and price <= sl:
                 progress["sl"] = True
                 closed = True
-                events.append(f"❌ SL hit at {price:.5f} (SL {sl:.5f}).")
+                events.append(f"❌ **SL hit** at {price:.5f}")
             elif direction == "bearish" and price >= sl:
                 progress["sl"] = True
                 closed = True
-                events.append(f"❌ SL hit at {price:.5f} (SL {sl:.5f}).")
+                events.append(f"❌ **SL hit** at {price:.5f}")
 
-        # --- TP checks (TP1–TP5) ---
         tp_levels = [
             ("TP1", "tp1", trade.tp1),
             ("TP2", "tp2", trade.tp2),
@@ -188,46 +157,36 @@ async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
 
                 if direction == "bullish" and price >= level:
                     progress[flag] = True
-                    events.append(
-                        f"✅ {label} hit at {price:.5f} (level {level:.5f})."
-                    )
+                    events.append(f"✅ **{label} hit** at {price:.5f}")
                 elif direction == "bearish" and price <= level:
                     progress[flag] = True
-                    events.append(
-                        f"✅ {label} hit at {price:.5f} (level {level:.5f})."
-                    )
+                    events.append(f"✅ **{label} hit** at {price:.5f}")
 
         if not events:
             continue
 
-        # Build update message
+        emoji = "🟢" if direction == "bullish" else "🔴"
         lines: list[str] = []
-        lines.append(f"🔔 **Update – {trade.symbol} {trade.direction.upper()}**")
+        lines.append(f"🔔 **Trade Update**")
+        lines.append(f"{emoji} {trade.symbol} | {direction.upper()}")
         if entry is not None:
             lines.append(f"Entry: {entry:.5f}")
         lines.extend(events)
 
-        # Decide whether the trade is fully 'done'
-        all_tps_hit_or_unused = True
-        for label, flag, level in tp_levels:
-            if level is None:
-                continue
-            if not progress[flag]:
-                all_tps_hit_or_unused = False
-                break
+        all_tps_hit = all(
+            progress[flag] for label, flag, level in tp_levels if level is not None
+        )
 
-        if progress["sl"] or all_tps_hit_or_unused:
+        if progress["sl"] or all_tps_hit:
             closed = True
 
         if closed:
-            lines.append("Trade closed and removed from active tracking.")
+            lines.append("📋 Trade closed.")
             ACTIVE_TRADES.pop(key, None)
             TRADE_PROGRESS.pop(key, None)
 
         await updates_channel.send("\n".join(lines)[:1900])
 
-
-# ========= Bot setup =========
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -243,80 +202,72 @@ async def on_ready():
         autoscan_loop.start()
 
 
-# ========= Slash commands =========
-
 @bot.slash_command(description="Show all available commands.")
 async def help(ctx: discord.ApplicationContext):
     commands_text = """
-**Blueprint Trader AI – Commands**
+**Blueprint Trader AI - Commands**
 
-`/scan asset` – Manual scan of a single asset (OANDA instrument, e.g. `EUR_USD`)  
-`/forex` – Scan all configured OANDA forex pairs  
-`/crypto` – Scan configured crypto assets  
-`/com` – Scan all commodities (metals + energies)  
-`/indices` – Scan configured indices (e.g. NQ & SP500)  
-`/market` – Scan all asset groups  
-`/trade` – Show current active trades with a short status update  
-`/live` – Show latest live price for all configured assets  
-`/backtest asset period` – Backtest the Blueprint strategy over a period.  
-   ➜ Example: `/backtest EUR_USD "Jan 2024 - Sep 2024"`
+**Scanning:**
+`/scan [asset]` - Detailed scan of a single asset
+`/forex` - Scan all forex pairs
+`/crypto` - Scan crypto assets
+`/com` - Scan commodities (metals + energies)
+`/indices` - Scan stock indices
+`/market` - Full market scan
+
+**Trading:**
+`/trade` - Show active trades with status
+`/live` - Latest prices for all assets
+
+**Analysis:**
+`/backtest [asset] [period]` - Test strategy performance
+  Example: `/backtest EUR_USD "Jan 2024 - Dec 2024"`
+
+**System:**
+`/cache` - View cache statistics
+`/clearcache` - Clear data cache
 """
     await ctx.respond(commands_text, ephemeral=True)
 
 
-@bot.slash_command(description="Scan a single asset with the Blueprint engine.")
+@bot.slash_command(description="Scan a single asset with full analysis.")
 async def scan(ctx: discord.ApplicationContext, asset: str):
     await ctx.defer()
-    result = scan_single_asset(asset)
+    
+    result = scan_single_asset(asset.upper().replace("/", "_"))
 
     if not result:
-        await ctx.respond(
-            f"No high-confluence (≥{4 if SIGNAL_MODE == 'standard' else 3}/7) setup found on {asset} right now. "
-            f"No trade idea for now."
-        )
+        await ctx.respond(f"❌ No data available for **{asset}**. Check the instrument name.")
         return
 
-    # Status line based on result.status
-    if result.status == "active":
-        status_line = "Status: ✅ **ACTIVE trade** (4H confirmation present)."
-        trade_line = (
-            f"• Trade: Entry {result.entry:.5f}, SL {result.stop_loss:.5f}, "
-            f"TP1 {result.tp1:.5f}, TP2 {result.tp2:.5f}, TP3 {result.tp3:.5f}, "
-            f"TP4 {result.tp4:.5f}, TP5 {result.tp5:.5f}"
+    if result.confluence_score < 3:
+        status_msg = (
+            f"📊 **{result.symbol}** | {result.direction.upper()}\n"
+            f"Confluence: {result.confluence_score}/7\n\n"
+            f"_Low confluence - no actionable setup at this time._"
         )
-    elif result.status == "in_progress":
-        status_line = "Status: 🕒 **In progress** (HTF zone valid, waiting for 4H confirmation)."
-        trade_line = "• Trade: No active entry yet – 4H confirmation not triggered."
-    else:
-        status_line = "Status: 🔎 Scan only (not enough confluence for a trade idea)."
-        trade_line = ""
+        await ctx.respond(status_msg)
+        return
 
-    msg_lines = [
-        f"{result.symbol} | {result.direction.upper()} | Confluence {result.confluence_score}/7",
-        status_line,
-        f"• Bias: {result.htf_bias}",
-        f"• Location: {result.location_note}",
-        f"• Fib: {result.fib_note}",
-        f"• Liquidity: {result.liquidity_note}",
-        f"• Structure: {result.structure_note}",
-        f"• 4H: {result.confirmation_note}",
-        f"• R/R: {result.rr_note}",
-        f"• Summary: {result.summary_reason}",
-    ]
+    msg = format_detailed_scan(result)
+    chunks = split_message(msg, limit=1900)
 
-    if trade_line:
-        msg_lines.append(trade_line)
-
-    await ctx.respond("\n".join(msg_lines)[:2000])
+    first = True
+    for chunk in chunks:
+        if first:
+            await ctx.respond(chunk)
+            first = False
+        else:
+            await ctx.followup.send(chunk)
 
 
-@bot.slash_command(description="Scan all configured OANDA forex pairs.")
+@bot.slash_command(description="Scan all forex pairs.")
 async def forex(ctx: discord.ApplicationContext):
     await ctx.defer()
     scan_results, _ = scan_forex()
 
     if not scan_results:
-        await ctx.respond("No high-confluence setups in Forex right now.")
+        await ctx.respond("📊 **Forex** - No setups found.")
         return
 
     msg = format_scan_group("Forex", scan_results)
@@ -331,13 +282,13 @@ async def forex(ctx: discord.ApplicationContext):
             await ctx.followup.send(chunk)
 
 
-@bot.slash_command(description="Scan configured crypto assets.")
+@bot.slash_command(description="Scan crypto assets.")
 async def crypto(ctx: discord.ApplicationContext):
     await ctx.defer()
     scan_results, _ = scan_crypto()
 
     if not scan_results:
-        await ctx.respond("No high-confluence setups in Crypto right now.")
+        await ctx.respond("📊 **Crypto** - No setups found.")
         return
 
     msg = format_scan_group("Crypto", scan_results)
@@ -352,7 +303,7 @@ async def crypto(ctx: discord.ApplicationContext):
             await ctx.followup.send(chunk)
 
 
-@bot.slash_command(description="Scan all commodities (metals + energies).")
+@bot.slash_command(description="Scan commodities (metals + energies).")
 async def com(ctx: discord.ApplicationContext):
     await ctx.defer()
     scan_results_m, _ = scan_metals()
@@ -360,7 +311,7 @@ async def com(ctx: discord.ApplicationContext):
     combined = scan_results_m + scan_results_e
 
     if not combined:
-        await ctx.respond("No high-confluence setups in Commodities right now.")
+        await ctx.respond("📊 **Commodities** - No setups found.")
         return
 
     msg = format_scan_group("Commodities", combined)
@@ -375,13 +326,13 @@ async def com(ctx: discord.ApplicationContext):
             await ctx.followup.send(chunk)
 
 
-@bot.slash_command(description="Scan configured indices (e.g. NQ & SP500).")
+@bot.slash_command(description="Scan stock indices.")
 async def indices(ctx: discord.ApplicationContext):
     await ctx.defer()
     scan_results, _ = scan_indices()
 
     if not scan_results:
-        await ctx.respond("No high-confluence setups in Indices right now.")
+        await ctx.respond("📊 **Indices** - No setups found.")
         return
 
     msg = format_scan_group("Indices", scan_results)
@@ -396,21 +347,20 @@ async def indices(ctx: discord.ApplicationContext):
             await ctx.followup.send(chunk)
 
 
-@bot.slash_command(description="Scan all markets (Forex, Metals, Indices, Energies, Crypto).")
+@bot.slash_command(description="Full market scan across all asset classes.")
 async def market(ctx: discord.ApplicationContext):
     await ctx.defer()
     markets = scan_all_markets()
 
+    messages = format_autoscan_output(markets)
+    
+    if not messages:
+        await ctx.respond("📊 **Market Scan** - No setups found.")
+        return
+
     first_message_sent = False
-
-    for name in ["Forex", "Metals", "Indices", "Energies", "Crypto"]:
-        scan_results, _ = markets.get(name, ([], []))
-        if not scan_results:
-            continue
-
-        msg = format_scan_group(name, scan_results)
+    for msg in messages:
         chunks = split_message(msg, limit=1900)
-
         for chunk in chunks:
             if not first_message_sent:
                 await ctx.respond(chunk)
@@ -419,50 +369,33 @@ async def market(ctx: discord.ApplicationContext):
                 await ctx.followup.send(chunk)
 
 
-@bot.slash_command(description="Show current active Blueprint trades.")
+@bot.slash_command(description="Show active trades with status.")
 async def trade(ctx: discord.ApplicationContext):
     if not ACTIVE_TRADES:
-        await ctx.respond("No active Blueprint trades being tracked right now.")
+        await ctx.respond("📋 No active trades being tracked.")
         return
 
     lines: list[str] = []
-    lines.append("📈 **Active Blueprint trades**")
+    lines.append("📈 **Active Trades**")
+    lines.append("")
 
     for key, t in ACTIVE_TRADES.items():
-        # Guard against None values
+        emoji = "🟢" if t.direction == "bullish" else "🔴"
         entry = t.entry if t.entry is not None else 0.0
         sl = t.stop_loss if t.stop_loss is not None else 0.0
-        tp1 = t.tp1 if t.tp1 is not None else 0.0
-        tp2 = t.tp2 if t.tp2 is not None else 0.0
-        tp3 = t.tp3 if t.tp3 is not None else 0.0
-        tp4 = t.tp4 if t.tp4 is not None else 0.0
-        tp5 = t.tp5 if t.tp5 is not None else 0.0
 
         current_price, rr = _compute_trade_progress(t)
-        if rr == rr:  # not NaN
-            rr_str = f"{rr:+.2f}R"
-        else:
-            rr_str = "N/A"
+        rr_str = f"{rr:+.2f}R" if rr == rr else "N/A"
 
-        lines.append(
-            f"• **{t.symbol}** | {t.direction.upper()} | Confluence {t.confluence_score}/7"
-        )
-        lines.append(
-            f"  Entry: {entry:.5f} | SL: {sl:.5f} | "
-            f"TP1: {tp1:.5f} | TP2: {tp2:.5f} | TP3: {tp3:.5f} | "
-            f"TP4: {tp4:.5f} | TP5: {tp5:.5f}"
-        )
-        lines.append(
-            f"  Status: {t.status} | Last D close: {current_price:.5f} | Progress: {rr_str}"
-        )
-        lines.append(f"  Bias: {t.htf_bias}")
+        lines.append(f"{emoji} **{t.symbol}** | {t.direction.upper()} | {t.confluence_score}/7")
+        lines.append(f"   Entry: {entry:.5f} | SL: {sl:.5f} | Progress: {rr_str}")
         lines.append("")
 
     msg = "\n".join(lines)
     await ctx.respond(msg[:2000])
 
 
-@bot.slash_command(description="Show the latest live price for all configured assets.")
+@bot.slash_command(description="Show latest prices for all assets.")
 async def live(ctx: discord.ApplicationContext):
     await ctx.defer()
     groups = {
@@ -474,11 +407,11 @@ async def live(ctx: discord.ApplicationContext):
     }
 
     lines: list[str] = []
-    lines.append("**Live prices (latest daily candle close)**")
+    lines.append("📊 **Live Prices**")
     lines.append("")
 
     for name, symbols in groups.items():
-        lines.append(f"__{name}__")
+        lines.append(f"**{name}**")
         if not symbols:
             lines.append("_No instruments configured._")
             lines.append("")
@@ -505,46 +438,34 @@ async def live(ctx: discord.ApplicationContext):
             await ctx.followup.send(chunk)
 
 
-@bot.slash_command(
-    description='Backtest an asset over a date range. Usage: /backtest EUR_USD "Jan 2024 - Sep 2024".'
-)
+@bot.slash_command(description='Backtest the strategy. Example: /backtest EUR_USD "Jan 2024 - Dec 2024"')
 async def backtest(ctx: discord.ApplicationContext, asset: str, period: str):
     await ctx.defer()
-    result = run_backtest(asset, period)
+    
+    result = run_backtest(asset.upper().replace("/", "_"), period)
 
-    total = result["total_trades"]
-    win_rate = result["win_rate"]
-    net_ret = result["net_return_pct"]
-    trades = result.get("trades", [])
-
-    tp1_count = sum(1 for t in trades if t.get("exit_reason") == "TP1")
-    tp2_count = sum(1 for t in trades if t.get("exit_reason") == "TP2")
-    tp3_count = sum(1 for t in trades if t.get("exit_reason") == "TP3")
-    sl_count = sum(1 for t in trades if t.get("exit_reason") == "SL")
-
-    msg_lines: list[str] = []
-    msg_lines.append(f"📊 **Backtest – {result['asset']}**")
-    msg_lines.append(f"Period: {result['period']}")
-    msg_lines.append(f"Total trades: {total}")
-    msg_lines.append(f"Winrate: {win_rate:.1f}%")
-    msg_lines.append(f"Net return (1% risk/trade): {net_ret:.1f}%")
-    msg_lines.append("")
-
-    if total > 0:
-        msg_lines.append("Exit breakdown:")
-        msg_lines.append(f"- TP1 hits: {tp1_count}")
-        msg_lines.append(f"- TP2 hits: {tp2_count}")
-        msg_lines.append(f"- TP3 hits: {tp3_count}")
-        msg_lines.append(f"- SL hits:  {sl_count}")
-        msg_lines.append("")
-
-    msg_lines.append(f"Note: {result['notes']}")
-
-    await ctx.respond("\n".join(msg_lines))
+    msg = format_backtest_result(result)
+    await ctx.respond(msg)
 
 
+@bot.slash_command(description="View cache statistics.")
+async def cache(ctx: discord.ApplicationContext):
+    stats = get_cache_stats()
+    
+    msg = (
+        f"📦 **Cache Statistics**\n\n"
+        f"Cached Items: {stats['cached_items']}\n"
+        f"Hit Rate: {stats['hit_rate_pct']}%\n"
+        f"Hits: {stats['hits']} | Misses: {stats['misses']}"
+    )
+    await ctx.respond(msg, ephemeral=True)
 
-# ========= Autoscan loop =========
+
+@bot.slash_command(description="Clear the data cache.")
+async def clearcache(ctx: discord.ApplicationContext):
+    clear_cache()
+    await ctx.respond("✅ Cache cleared successfully.", ephemeral=True)
+
 
 @tasks.loop(hours=SCAN_INTERVAL_HOURS)
 async def autoscan_loop():
@@ -558,37 +479,16 @@ async def autoscan_loop():
         print("❌ Scan channel not found.")
         return
 
-    markets = scan_all_markets()  # {'Forex': (scan_results, trade_ideas), ...}
+    markets = scan_all_markets()
 
-    # 1) Post scan summaries per market
-    for group_name, (scan_results, trade_ideas) in markets.items():
-        if not scan_results:
-            continue
-
-        lines: list[str] = []
-        lines.append(f"📊 **{group_name} 4H autoscan**")
-
-        for res in scan_results:
-            status_tag = (
-                "ACTIVE" if res.status == "active"
-                else "INP" if res.status == "in_progress"
-                else "SCAN"
-            )
-            lines.append(
-                f"{res.symbol} | {res.direction.upper()} | {res.confluence_score}/7 ({status_tag}) – "
-                f"loc={'Y' if 'price in upper' in res.location_note or 'price in lower' in res.location_note else 'N'}, "
-                f"fib={'Y' if 'golden pocket' in res.fib_note else 'N'}, "
-                f"liq={'Y' if 'liquidity' in res.liquidity_note else 'N'}, "
-                f"struct={'Y' if 'Structure supports' in res.structure_note else 'N'}, "
-                f"4H={'Y' if 'H4: structure aligned' in res.confirmation_note else 'N'}, "
-                f"rr={'Y' if 'Approx first target' in res.rr_note else 'N'}"
-            )
-
-        for chunk in split_message("\n".join(lines), limit=1900):
+    messages = format_autoscan_output(markets)
+    for msg in messages:
+        chunks = split_message(msg, limit=1900)
+        for chunk in chunks:
             await scan_channel.send(chunk)
 
-        # 2) Handle new ACTIVE trades
-        if trades_channel is not None:
+    if trades_channel is not None:
+        for group_name, (scan_results, trade_ideas) in markets.items():
             for trade in trade_ideas:
                 if trade.status != "active":
                     continue
@@ -600,38 +500,25 @@ async def autoscan_loop():
                 ACTIVE_TRADES[trade_key] = trade
                 _ensure_trade_progress(trade_key)
 
+                emoji = "🟢" if trade.direction == "bullish" else "🔴"
                 t_lines: list[str] = []
-                t_lines.append(f"🎯 **New {trade.direction.upper()} trade – {trade.symbol}**")
+                t_lines.append(f"🎯 **New Trade Signal**")
+                t_lines.append(f"{emoji} {trade.symbol} | {trade.direction.upper()}")
                 t_lines.append(f"Confluence: {trade.confluence_score}/7")
 
                 if trade.entry is not None and trade.stop_loss is not None:
-                    t_lines.append(
-                        f"Entry: {trade.entry:.5f} | SL: {trade.stop_loss:.5f}"
-                    )
+                    t_lines.append(f"Entry: {trade.entry:.5f} | SL: {trade.stop_loss:.5f}")
                 if trade.tp1 is not None:
-                    t_lines.append(
-                        f"TP1: {trade.tp1:.5f} | TP2: {trade.tp2:.5f} | "
-                        f"TP3: {trade.tp3:.5f} | TP4: {trade.tp4:.5f} | TP5: {trade.tp5:.5f}"
-                    )
-
-                t_lines.append(f"Bias: {trade.htf_bias}")
-                t_lines.append(f"Location: {trade.location_note}")
-                t_lines.append(f"Fib: {trade.fib_note}")
-                t_lines.append(f"Liquidity: {trade.liquidity_note}")
-                t_lines.append(f"Structure: {trade.structure_note}")
-                t_lines.append(f"4H: {trade.confirmation_note}")
+                    t_lines.append(f"TP1: {trade.tp1:.5f} | TP2: {trade.tp2:.5f} | TP3: {trade.tp3:.5f}")
 
                 await trades_channel.send("\n".join(t_lines)[:1900])
 
-    # 3) Check TP/SL updates for ACTIVE trades and send to TRADE_UPDATES channel
     updates_channel = bot.get_channel(TRADE_UPDATES_CHANNEL_ID)
     if updates_channel is not None and ACTIVE_TRADES:
         await check_trade_updates(updates_channel)
 
     print("✅ Autoscan finished.")
 
-
-# ========= Run bot =========
 
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_BOT_TOKEN not found. Set it in Replit Secrets.")

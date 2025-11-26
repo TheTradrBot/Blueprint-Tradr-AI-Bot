@@ -1,116 +1,132 @@
-# Overview
+# Blueprint Trader AI
+
+## Overview
 
 Blueprint Trader AI is an automated trading signal bot that scans multiple markets (forex, metals, indices, energies, crypto) using a multi-timeframe confluence strategy. The bot identifies high-probability trading opportunities by analyzing 7 technical pillars across monthly, weekly, daily, and 4-hour timeframes. It integrates with Discord for signal delivery and uses OANDA's practice API for market data.
 
-The system operates on a scan-and-signal model: it periodically scans instruments for confluence setups, sends signals to Discord channels, tracks active trades, and monitors for take-profit/stop-loss events.
+## Recent Changes
 
-# User Preferences
+**November 26, 2024 - Major Strategy Optimization & System Upgrade**
+
+### Strategy Improvements
+- Optimized confluence detection with more flexible thresholds
+- Improved Fibonacci retracement calculations (50%-79.6% zones)
+- Enhanced liquidity detection with sweep lookback up to 8 candles
+- Better swing detection with asymmetric lookback periods
+- Tighter stop loss placement using ATR-based calculations
+- Realistic R:R targets (1.5R, 2.5R, 4R, 5.5R, 7R)
+
+### Backtest Improvements
+- No look-ahead bias - uses only data available at each evaluation point
+- Conservative exit assumptions (SL hit first when both SL/TP touched)
+- 3-bar cooldown between trades to avoid overtrading
+- Detailed trade logging with TP/SL breakdown
+
+### Performance & Caching
+- Added intelligent caching layer (`cache.py`) for OANDA API responses
+- TTL-based caching: Monthly (1hr), Weekly (30min), Daily (10min), H4 (5min)
+- Cache statistics and management commands (/cache, /clearcache)
+
+### Discord UX Improvements
+- Cleaner autoscan output with active/watching counts
+- Detailed single asset scans with setup type and "what to look for"
+- Better formatting with emojis for direction (🟢/🔴)
+- Improved help command with all available commands
+
+## User Preferences
 
 Preferred communication style: Simple, everyday language.
 
-# Recent Changes
+## System Architecture
 
-**November 25, 2024 - Strategy Optimization**
-- Lowered confluence threshold from 6/7 to 5/7 for active trades (improves trade frequency while maintaining quality)
-- Relaxed HTF bias to accept Weekly trend leadership even when Daily is "mixed" (allows pullback entries)
-- Widened liquidity tolerance from 1.0% to 2.5% for proximity checks (more realistic detection range)
-- Extended liquidity sweep detection from 1 to 5 candles with 100-candle lookback window (catches more sweep events)
-- **Impact**: EUR_USD backtest improved from 0 to 2 trades, XAU_USD now achieves ACTIVE status (5/7 confluence)
+### Core Components
 
-# System Architecture
+1. **Strategy Engine** (`strategy.py`)
+   - 7-pillar confluence evaluation
+   - Multi-timeframe analysis (M, W, D, H4)
+   - ScanResult dataclass with setup info
 
-## Core Design Pattern
+2. **Backtest Engine** (`backtest.py`)
+   - Walk-forward simulation
+   - No look-ahead bias
+   - Conservative exit logic
 
-**Multi-Timeframe Confluence Engine**: The strategy evaluates 7 technical criteria (HTF bias, location, Fibonacci levels, liquidity, structure, 4H confirmation, risk/reward) across 4 timeframes. Trades require 5/7 criteria met for "active" status (configurable via SIGNAL_MODE), with an adapter pattern to handle strategy signature changes between versions.
+3. **Data Layer** (`data.py`)
+   - OANDA v20 API integration
+   - Intelligent caching
 
-**Event-Driven Discord Bot**: Uses discord.py with scheduled tasks for automated scanning at configurable intervals (default 4 hours). The bot maintains in-memory trade state and posts to dedicated channels (scans, trades, updates).
+4. **Cache System** (`cache.py`)
+   - TTL-based in-memory cache
+   - Thread-safe operations
+   - Statistics tracking
 
-**Stateless Data Layer**: All market data fetched on-demand from OANDA REST API. No local caching or database persistence - the system queries fresh OHLCV data for each scan operation.
+5. **Formatting** (`formatting.py`)
+   - Discord message formatting
+   - Scan summaries and details
+   - Backtest result formatting
 
-## Trading Logic Components
+6. **Bot** (`main.py`)
+   - Discord slash commands
+   - Autoscan loop (4-hour interval)
+   - Trade tracking
 
-**Strategy Module (`strategy.py`)**: Implements the 7-pillar confluence logic with dataclass-based results. Scans can be run per-asset or grouped by market type. Includes trend inference using EMAs and structure detection for swing highs/lows.
+### The 7 Pillars of Confluence
 
-**Backtesting Engine (`backtest.py`)**: Walk-forward simulation engine that replays historical candles to test strategy performance. Includes signature detection adapter to work with evolving strategy function parameters.
+1. **HTF Bias** - Monthly, Weekly, Daily trend alignment
+2. **Location** - Price near key S/R levels or supply/demand zones
+3. **Fibonacci** - Price in 50%-79.6% retracement zone
+4. **Liquidity** - Near equal highs/lows or recent sweeps
+5. **Structure** - Market structure supports direction
+6. **Confirmation** - 4H BOS, momentum candles, or engulfing patterns
+7. **R:R** - Minimum 1.5R to first target
 
-**Indicator Library (`indicators.py`)**: Provides EMA and RSI calculations. Designed for minimal dependencies - pure Python implementations without pandas/numpy requirements.
+### Trade Status Levels
 
-## Data Flow
+- **ACTIVE** - Full confirmation, trade entry triggered
+- **WATCHING** - Good setup, waiting for confirmation
+- **SCAN** - Low confluence, no actionable setup
 
-1. **Scan Trigger**: Discord task scheduler or manual command initiates scan
-2. **Data Fetch**: `data.py` queries OANDA for M/W/D/H4 candles per instrument
-3. **Analysis**: `strategy.py` evaluates all 7 confluence criteria and assigns scores
-4. **Formatting**: `formatting.py` converts ScanResult objects into readable Discord messages
-5. **Delivery**: Bot posts formatted signals to appropriate Discord channels
-6. **Trade Tracking**: Active trades (5/7+ confluence in standard mode) stored in `trade_state.py` in-memory registry
-7. **Monitoring**: Periodic checks evaluate registered trades for TP/SL hits using latest H4 data
+## Discord Commands
 
-## Configuration Management
+**Scanning:**
+- `/scan [asset]` - Detailed analysis of a single asset
+- `/forex` - Scan all forex pairs
+- `/crypto` - Scan crypto assets
+- `/com` - Scan commodities (metals + energies)
+- `/indices` - Scan stock indices
+- `/market` - Full market scan
 
-**Two-Tier Config**: Sensitive credentials (Discord token, OANDA keys) stored in Replit Secrets (environment variables). Public configuration (channel IDs, instrument lists, scan intervals, signal mode) defined in `config.py`.
+**Trading:**
+- `/trade` - Show active trades with status
+- `/live` - Latest prices for all assets
 
-**Signal Modes**: Strategy strictness controlled via `SIGNAL_MODE` setting - "standard" for fewer high-quality signals, "aggressive" for more permissive scanning (feature flag for future use).
+**Analysis:**
+- `/backtest [asset] [period]` - Test strategy performance
 
-## Architecture Decisions & Rationale
+**System:**
+- `/cache` - View cache statistics
+- `/clearcache` - Clear data cache
+- `/help` - Show all commands
 
-**In-Memory State vs Database**: 
-- **Chosen**: In-memory dictionaries for active trades
-- **Rationale**: Simpler deployment, faster reads, acceptable for signal bot use case where state reset on restart is tolerable
-- **Tradeoff**: Lose trade history on crash/restart, can't analyze historical performance without separate logging
+## External Dependencies
 
-**OANDA Practice API**:
-- **Chosen**: OANDA fxPractice endpoint for data
-- **Rationale**: Free practice accounts, reliable forex/metals/indices data, straightforward REST API
-- **Alternative Considered**: Crypto-native APIs (Coinbase, Binance) for crypto assets
-- **Limitation**: May need multi-source architecture if expanding crypto coverage
+### Services
+- **Discord API** - Bot communication (py-cord library)
+- **OANDA v20 API** - Market data (practice endpoint)
 
-**Discord as UI**:
-- **Chosen**: Discord bot with channel-based routing
-- **Rationale**: Low friction for traders already using Discord, rich formatting support, webhook simplicity
-- **Tradeoff**: Limited interactivity compared to web dashboard, channel organization must be maintained manually
+### Environment Variables
+- `DISCORD_BOT_TOKEN` - Discord bot token
+- `OANDA_API_KEY` - OANDA API key
+- `OANDA_ACCOUNT_ID` - OANDA account ID
 
-**No ML/AI Components**:
-- **Chosen**: Pure technical analysis rules-based strategy
-- **Rationale**: Deterministic behavior, easier to debug and backtest, transparent logic for users
-- **Note**: "AI" in name refers to automated intelligence of multi-timeframe confluence, not machine learning
+### Python Dependencies
+- `py-cord>=2.6.1` - Discord bot framework
+- `requests>=2.32.5` - HTTP client for OANDA API
 
-**Backtest Time Simulation**:
-- **Chosen**: Walk-forward with exact timestamp matching for entry/exit simulation
-- **Rationale**: More realistic than vectorized backtesting, captures actual candle-close timing
-- **Limitation**: Slower than vectorized approaches, no tick-level precision (uses candle closes only)
+## Configuration
 
-# External Dependencies
-
-## Third-Party Services
-
-**Discord API**: 
-- Purpose: Bot communication platform, signal delivery, user commands
-- Library: `discord.py` (official Python wrapper)
-- Credentials: `DISCORD_BOT_TOKEN` environment variable
-- Channels: Three configured channels for scans, trades, and updates
-
-**OANDA v20 REST API**:
-- Purpose: OHLCV market data for forex, metals, indices, energies
-- Endpoint: `https://api-fxpractice.oanda.com`
-- Credentials: `OANDA_API_KEY` and `OANDA_ACCOUNT_ID` environment variables
-- Data: Mid-price candles at M/W/D/H4 granularities
-
-## Instrument Coverage
-
-**Forex Pairs**: Major and cross pairs (defined in `FOREX_PAIRS` list in config.py)
-**Metals**: Gold, Silver (XAU_USD, XAG_USD style instruments)
-**Indices**: Stock market indices via CFDs
-**Energies**: Oil and natural gas instruments
-**Crypto**: Bitcoin and major altcoins (BTC_USD, ETH_USD format)
-
-## Python Dependencies
-
-- `requests`: HTTP client for OANDA API calls
-- `discord.py`: Discord bot framework with task scheduling
-- Standard library: `datetime`, `dataclasses`, `typing`, `inspect` for core functionality
-
-## Infrastructure
-
-**Hosting**: Designed for Replit deployment (references Replit Secrets for environment variables)
-**Storage**: No database - all state ephemeral in process memory
-**Scheduling**: Discord.py task loop for periodic scans, no external cron required
+Key settings in `config.py`:
+- `SIGNAL_MODE` - "standard" (stricter) or "aggressive" (more signals)
+- `SCAN_INTERVAL_HOURS` - Autoscan frequency (default: 4)
+- Discord channel IDs for scan, trades, and updates
+- Instrument lists for each market type

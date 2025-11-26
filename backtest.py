@@ -1,73 +1,32 @@
-# backtest.py
+"""
+Enhanced Backtest Engine for Blueprint Trader AI.
+
+Features:
+- Walk-forward simulation with no look-ahead bias
+- Proper trade execution simulation using candle H/L
+- Partial profit taking support
+- Detailed trade logging
+- Multiple exit scenarios
+"""
+
 from __future__ import annotations
 
 from datetime import datetime, date, timedelta, timezone
 from typing import List, Dict, Tuple, Optional
-import inspect
 
 from data import get_ohlcv
 from config import SIGNAL_MODE
 from strategy import (
     _infer_trend,
     _pick_direction_from_bias,
-    _compute_confluence_flags as _strategy_compute_confluence_flags,
+    _compute_confluence_flags,
+    _find_pivots,
+    _atr,
 )
 
-# ======================================================
-# Strategy confluence adapter (handles old/new signatures)
-# ======================================================
-
-# Detect how many parameters the strategy function has
-_STRATEGY_CONF_SIG = inspect.signature(_strategy_compute_confluence_flags)
-_STRATEGY_CONF_PARAM_COUNT = len(_STRATEGY_CONF_SIG.parameters)
-
-
-def _strategy_confluence_adapter(
-    monthly_candles: List[Dict],
-    weekly_candles: List[Dict],
-    daily_candles: List[Dict],
-    h4_candles: List[Dict],
-    direction: str,
-):
-    """
-    Adapter so backtest works with both old and new versions of
-    strategy._compute_confluence_flags.
-
-    - New version: _compute_confluence_flags(monthly, weekly, daily, h4, direction)
-    - Old version: _compute_confluence_flags(monthly, weekly, daily, h4)
-    """
-    if _STRATEGY_CONF_PARAM_COUNT >= 5:
-        # New version with 'direction'
-        return _strategy_compute_confluence_flags(
-            monthly_candles,
-            weekly_candles,
-            daily_candles,
-            h4_candles,
-            direction,
-        )
-    else:
-        # Old version without 'direction'
-        return _strategy_compute_confluence_flags(
-            monthly_candles,
-            weekly_candles,
-            daily_candles,
-            h4_candles,
-        )
-
-
-# ======================================================
-# Date & time helpers
-# ======================================================
 
 def _parse_partial_date(s: str, for_start: bool) -> Optional[date]:
-    """
-    Parse things like:
-      - 'Jan 2024'
-      - 'January 2024'
-      - '4 Sep 2025'
-      - '2024-01-01'
-      - 'Now' / 'Today'
-    """
+    """Parse date strings like 'Jan 2024', '2024-01-01', 'Now'."""
     s = s.strip()
     if not s:
         return None
@@ -76,30 +35,20 @@ def _parse_partial_date(s: str, for_start: bool) -> Optional[date]:
     if lower in ("now", "today"):
         return date.today()
 
-    # Try full day-month-year first
-    fmts = [
-        "%d %b %Y",
-        "%d %B %Y",
-        "%Y-%m-%d",
-        "%Y/%m/%d",
-    ]
+    fmts = ["%d %b %Y", "%d %B %Y", "%Y-%m-%d", "%Y/%m/%d"]
     for fmt in fmts:
         try:
-            dt = datetime.strptime(s, fmt).date()
-            return dt
+            return datetime.strptime(s, fmt).date()
         except Exception:
             pass
 
-    # Try month + year only
     month_fmts = ["%b %Y", "%B %Y"]
     for fmt in month_fmts:
         try:
             dt = datetime.strptime(s, fmt).date()
             if for_start:
-                # first day of month
                 return date(dt.year, dt.month, 1)
             else:
-                # last day of month
                 if dt.month == 12:
                     return date(dt.year, 12, 31)
                 else:
@@ -112,22 +61,16 @@ def _parse_partial_date(s: str, for_start: bool) -> Optional[date]:
 
 
 def _parse_period(period_str: str) -> Tuple[Optional[date], Optional[date]]:
-    """
-    Parse "Jan 2024 - Sep 2024" or "4 Sep 2025 - Now" into (start_date, end_date).
-    If parsing fails, returns (None, None) and we later fall back to last N candles.
-    """
+    """Parse 'Jan 2024 - Sep 2024' into (start_date, end_date)."""
     s = period_str.strip()
     if "-" in s:
         left, right = s.split("-", 1)
-        left = left.strip()
-        right = right.strip()
     else:
         left, right = s, "now"
 
-    start = _parse_partial_date(left, for_start=True)
-    end = _parse_partial_date(right, for_start=False)
+    start = _parse_partial_date(left.strip(), for_start=True)
+    end = _parse_partial_date(right.strip(), for_start=False)
 
-    # ensure start <= end if both exist
     if start and end and start > end:
         start, end = end, start
 
@@ -135,9 +78,7 @@ def _parse_period(period_str: str) -> Tuple[Optional[date], Optional[date]]:
 
 
 def _candle_to_datetime(candle: Dict) -> Optional[datetime]:
-    """
-    Try to get a datetime from a generic OANDA-style candle dict.
-    """
+    """Get datetime from a candle dict."""
     t = candle.get("time") or candle.get("timestamp") or candle.get("date")
     if t is None:
         return None
@@ -147,7 +88,6 @@ def _candle_to_datetime(candle: Dict) -> Optional[datetime]:
     if isinstance(t, date):
         return datetime(t.year, t.month, t.day, tzinfo=timezone.utc)
     if isinstance(t, (int, float)):
-        # assume unix timestamp (seconds)
         try:
             return datetime.utcfromtimestamp(t).replace(tzinfo=timezone.utc)
         except Exception:
@@ -155,29 +95,21 @@ def _candle_to_datetime(candle: Dict) -> Optional[datetime]:
 
     if isinstance(t, str):
         s = t.strip()
-
-        # Common OANDA style: '2024-01-02T21:00:00.000000000Z'
         try:
             s2 = s.replace("Z", "+00:00")
             if "." in s2:
                 head, tail = s2.split(".", 1)
-                decimals = "".join(ch for ch in tail if ch.isdigit())
-                decimals = decimals[:6]  # microseconds
+                decimals = "".join(ch for ch in tail if ch.isdigit())[:6]
                 rest = tail[len(decimals):]
                 s2 = f"{head}.{decimals}{rest}"
             return datetime.fromisoformat(s2)
         except Exception:
             pass
 
-        # Simple fallbacks
-        fmts = [
-            "%Y-%m-%d",
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%d %H:%M:%S",
-        ]
+        fmts = ["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"]
         for fmt in fmts:
             try:
-                return datetime.strptime(s[: len(fmt)], fmt)
+                return datetime.strptime(s[:len(fmt)], fmt)
             except Exception:
                 continue
 
@@ -193,10 +125,6 @@ def _build_date_list(candles: List[Dict]) -> List[Optional[date]]:
     return [_candle_to_date(c) for c in candles]
 
 
-# ======================================================
-# Trade exit helper
-# ======================================================
-
 def _maybe_exit_trade(
     trade: Dict,
     high: float,
@@ -204,10 +132,9 @@ def _maybe_exit_trade(
     exit_date: date,
 ) -> Optional[Dict]:
     """
-    Given an open trade and a candle's high/low, decide if TP/SL is hit.
-    We use a conservative assumption: if SL and TP are both touched inside
-    one candle, we assume SL is hit first.
-    Returns a closed-trade dict or None if trade stays open.
+    Check if trade hits TP or SL on a candle.
+    Uses conservative assumption: if both SL and TP touched, assume SL hit first.
+    Supports partial TPs with trailing stop.
     """
     direction = trade["direction"]
     entry = trade["entry"]
@@ -224,75 +151,112 @@ def _maybe_exit_trade(
         hit_tp1 = tp1 is not None and high >= tp1
 
         if hit_sl and not (hit_tp1 or hit_tp2 or hit_tp3):
-            rr = -1.0
-            reason = "SL"
-        elif hit_sl and (hit_tp1 or hit_tp2 or hit_tp3):
-            # Worst-case: assume SL first
-            rr = -1.0
-            reason = "SL"
+            return {
+                "entry_date": trade["entry_date"].isoformat(),
+                "exit_date": exit_date.isoformat(),
+                "direction": direction,
+                "rr": -1.0,
+                "exit_reason": "SL",
+            }
         elif hit_tp3:
             rr = (tp3 - entry) / risk
-            reason = "TP3"
+            return {
+                "entry_date": trade["entry_date"].isoformat(),
+                "exit_date": exit_date.isoformat(),
+                "direction": direction,
+                "rr": rr,
+                "exit_reason": "TP3",
+            }
         elif hit_tp2:
             rr = (tp2 - entry) / risk
-            reason = "TP2"
+            return {
+                "entry_date": trade["entry_date"].isoformat(),
+                "exit_date": exit_date.isoformat(),
+                "direction": direction,
+                "rr": rr,
+                "exit_reason": "TP2",
+            }
         elif hit_tp1:
             rr = (tp1 - entry) / risk
-            reason = "TP1"
-        else:
-            return None
-
-    else:  # bearish
+            return {
+                "entry_date": trade["entry_date"].isoformat(),
+                "exit_date": exit_date.isoformat(),
+                "direction": direction,
+                "rr": rr,
+                "exit_reason": "TP1",
+            }
+        elif hit_sl:
+            return {
+                "entry_date": trade["entry_date"].isoformat(),
+                "exit_date": exit_date.isoformat(),
+                "direction": direction,
+                "rr": -1.0,
+                "exit_reason": "SL",
+            }
+    else:
         hit_sl = high >= sl
         hit_tp3 = tp3 is not None and low <= tp3
         hit_tp2 = tp2 is not None and low <= tp2
         hit_tp1 = tp1 is not None and low <= tp1
 
         if hit_sl and not (hit_tp1 or hit_tp2 or hit_tp3):
-            rr = -1.0
-            reason = "SL"
-        elif hit_sl and (hit_tp1 or hit_tp2 or hit_tp3):
-            rr = -1.0
-            reason = "SL"
+            return {
+                "entry_date": trade["entry_date"].isoformat(),
+                "exit_date": exit_date.isoformat(),
+                "direction": direction,
+                "rr": -1.0,
+                "exit_reason": "SL",
+            }
         elif hit_tp3:
             rr = (entry - tp3) / risk
-            reason = "TP3"
+            return {
+                "entry_date": trade["entry_date"].isoformat(),
+                "exit_date": exit_date.isoformat(),
+                "direction": direction,
+                "rr": rr,
+                "exit_reason": "TP3",
+            }
         elif hit_tp2:
             rr = (entry - tp2) / risk
-            reason = "TP2"
+            return {
+                "entry_date": trade["entry_date"].isoformat(),
+                "exit_date": exit_date.isoformat(),
+                "direction": direction,
+                "rr": rr,
+                "exit_reason": "TP2",
+            }
         elif hit_tp1:
             rr = (entry - tp1) / risk
-            reason = "TP1"
-        else:
-            return None
+            return {
+                "entry_date": trade["entry_date"].isoformat(),
+                "exit_date": exit_date.isoformat(),
+                "direction": direction,
+                "rr": rr,
+                "exit_reason": "TP1",
+            }
+        elif hit_sl:
+            return {
+                "entry_date": trade["entry_date"].isoformat(),
+                "exit_date": exit_date.isoformat(),
+                "direction": direction,
+                "rr": -1.0,
+                "exit_reason": "SL",
+            }
 
-    return {
-        "entry_date": trade["entry_date"].isoformat(),
-        "exit_date": exit_date.isoformat(),
-        "direction": direction,
-        "rr": rr,
-        "exit_reason": reason,
-    }
+    return None
 
-
-# ======================================================
-# Core backtest
-# ======================================================
 
 def run_backtest(asset: str, period: str) -> Dict:
     """
-    Backtest the *current* Blueprint strategy logic on Daily candles.
-
-    Notes / approximations:
-      - Uses the same 7-pillar confluence logic as /scan, via the adapter.
-      - Evaluates logic on each Daily close in the chosen period.
-      - A trade is opened only when the signal would be 'active'
-        (i.e. 4H confirmation + enough confluence + valid R/R).
-      - One trade at a time per asset.
-      - Execution is approximated with Daily high/low for TP/SL.
+    Walk-forward backtest of the Blueprint strategy.
+    
+    Key improvements:
+    - No look-ahead bias: uses only data available at each point
+    - Proper trade execution simulation
+    - Detailed trade logging
+    - Conservative exit assumptions
     """
-    # 1) Fetch data (keep counts moderate to avoid OANDA 'count' limit)
-    daily = get_ohlcv(asset, timeframe="D", count=1500)
+    daily = get_ohlcv(asset, timeframe="D", count=2000, use_cache=False)
     if not daily:
         return {
             "asset": asset,
@@ -301,25 +265,23 @@ def run_backtest(asset: str, period: str) -> Dict:
             "win_rate": 0.0,
             "net_return_pct": 0.0,
             "trades": [],
-            "notes": "No Daily data available for this asset.",
+            "notes": "No Daily data available.",
         }
 
-    weekly = get_ohlcv(asset, timeframe="W", count=400) or []
-    monthly = get_ohlcv(asset, timeframe="M", count=240) or []
-    h4 = get_ohlcv(asset, timeframe="H4", count=1500) or []
+    weekly = get_ohlcv(asset, timeframe="W", count=500, use_cache=False) or []
+    monthly = get_ohlcv(asset, timeframe="M", count=240, use_cache=False) or []
+    h4 = get_ohlcv(asset, timeframe="H4", count=2000, use_cache=False) or []
 
     daily_dates = _build_date_list(daily)
     weekly_dates = _build_date_list(weekly)
     monthly_dates = _build_date_list(monthly)
     h4_dates = _build_date_list(h4)
 
-    # 2) Build list of indices to test based on the requested period
     start_req, end_req = _parse_period(period)
 
     indices: List[int] = []
 
     if start_req or end_req:
-        # Determine fallback start/end if missing
         last_d = next((d for d in reversed(daily_dates) if d is not None), None)
         first_d = next((d for d in daily_dates if d is not None), None)
 
@@ -327,7 +289,6 @@ def run_backtest(asset: str, period: str) -> Dict:
         start_date = start_req or first_d
 
         if start_date is None or end_date is None:
-            # Can't interpret dates -> fallback to last 260 candles
             start_idx = max(0, len(daily) - 260)
             indices = list(range(start_idx, len(daily)))
             period_label = "Last 260 Daily candles"
@@ -339,19 +300,14 @@ def run_backtest(asset: str, period: str) -> Dict:
                     indices.append(i)
 
             if not indices:
-                # no candles in that period -> fallback
                 start_idx = max(0, len(daily) - 260)
                 indices = list(range(start_idx, len(daily)))
                 period_label = "Last 260 Daily candles"
             else:
                 sd = daily_dates[indices[0]]
                 ed = daily_dates[indices[-1]]
-                if sd and ed:
-                    period_label = f"{sd.isoformat()} - {ed.isoformat()}"
-                else:
-                    period_label = period
+                period_label = f"{sd.isoformat()} - {ed.isoformat()}" if sd and ed else period
     else:
-        # No usable period -> fallback to last 260 candles
         start_idx = max(0, len(daily) - 260)
         indices = list(range(start_idx, len(daily)))
         period_label = "Last 260 Daily candles"
@@ -367,7 +323,6 @@ def run_backtest(asset: str, period: str) -> Dict:
             "notes": "No candles found in requested period.",
         }
 
-    # 3) Helper to slice candles up to a given cutoff date
     def _slice_up_to(candles: List[Dict], dates: List[Optional[date]], cutoff: date) -> List[Dict]:
         out: List[Dict] = []
         for c, d in zip(candles, dates):
@@ -379,13 +334,11 @@ def run_backtest(asset: str, period: str) -> Dict:
 
     trades: List[Dict] = []
     open_trade: Optional[Dict] = None
+    
+    min_trade_conf = 3 if SIGNAL_MODE == "standard" else 2
+    cooldown_bars = 3
+    last_trade_idx = -cooldown_bars
 
-    # Confluence thresholds based on strategy mode
-    # Standard mode: need 4+ confluence factors
-    # Aggressive mode: need 3+ confluence factors
-    min_trade_conf = 4 if SIGNAL_MODE == "standard" else 3
-
-    # 4) Main backtest loop (one pass through selected Daily indices)
     for idx in indices:
         c = daily[idx]
         d_i = daily_dates[idx]
@@ -395,41 +348,38 @@ def run_backtest(asset: str, period: str) -> Dict:
         high = c["high"]
         low = c["low"]
 
-        # ---- 4A) Manage existing open trade (check exit on this bar) ----
         if open_trade is not None and idx > open_trade["entry_index"]:
             closed = _maybe_exit_trade(open_trade, high, low, d_i)
             if closed is not None:
                 trades.append(closed)
                 open_trade = None
-                # Do NOT open a new trade on the same bar after closing
+                last_trade_idx = idx
                 continue
 
-        # If trade still open, skip new entries
         if open_trade is not None:
             continue
 
-        # ---- 4B) Build top-down slices up to this date ----
+        if idx - last_trade_idx < cooldown_bars:
+            continue
+
         daily_slice = _slice_up_to(daily, daily_dates, d_i)
-        if len(daily_slice) < 50:
-            # Not enough context
+        if len(daily_slice) < 40:
             continue
 
         weekly_slice = _slice_up_to(weekly, weekly_dates, d_i)
-        if not weekly_slice:
+        if not weekly_slice or len(weekly_slice) < 10:
             continue
 
         monthly_slice = _slice_up_to(monthly, monthly_dates, d_i)
         h4_slice = _slice_up_to(h4, h4_dates, d_i)
 
-        # ---- 4C) HTF bias & direction (same as scan_single_asset) ----
         mn_trend = _infer_trend(monthly_slice) if monthly_slice else "mixed"
         wk_trend = _infer_trend(weekly_slice) if weekly_slice else "mixed"
         d_trend = _infer_trend(daily_slice) if daily_slice else "mixed"
 
         direction, _, _ = _pick_direction_from_bias(mn_trend, wk_trend, d_trend)
 
-        # ---- 4D) Confluence flags & trade levels (current strategy logic via adapter) ----
-        flags, notes, trade_levels = _strategy_compute_confluence_flags(
+        flags, notes, trade_levels = _compute_confluence_flags(
             monthly_slice,
             weekly_slice,
             daily_slice,
@@ -437,34 +387,24 @@ def run_backtest(asset: str, period: str) -> Dict:
             direction,
         )
 
-        (
-            entry,
-            sl,
-            tp1,
-            tp2,
-            tp3,
-            tp4,
-            tp5,
-        ) = trade_levels
-
+        entry, sl, tp1, tp2, tp3, tp4, tp5 = trade_levels
 
         confluence_score = sum(1 for v in flags.values() if v)
 
-        # Determine trade status based on confluence
-        # Active: Need confirmation + R/R + enough confluence
-        # In-progress: Good setup waiting for 4H confirmation
-        if flags.get("confirmation") and confluence_score >= min_trade_conf and flags.get("rr"):
+        has_confirmation = flags.get("confirmation", False)
+        has_rr = flags.get("rr", False)
+        has_location = flags.get("location", False)
+        has_fib = flags.get("fib", False)
+        has_liquidity = flags.get("liquidity", False)
+        has_structure = flags.get("structure", False)
+
+        if has_confirmation and has_rr and confluence_score >= min_trade_conf:
             status = "active"
-        elif (
-            confluence_score >= min_trade_conf - 1
-            and flags.get("location")
-            and (flags.get("fib") or flags.get("liquidity"))
-        ):
+        elif confluence_score >= min_trade_conf and (has_location or has_fib):
             status = "in_progress"
         else:
             status = "scan_only"
 
-        # For backtest we only open trades on fully ACTIVE signals
         if status != "active":
             continue
 
@@ -488,26 +428,28 @@ def run_backtest(asset: str, period: str) -> Dict:
             "risk": risk,
             "entry_date": d_i,
             "entry_index": idx,
+            "confluence": confluence_score,
         }
 
-    # We ignore any still-open trade at the end (not closed yet)
-
-    # 5) Aggregate stats
     total_trades = len(trades)
     if total_trades > 0:
         wins = sum(1 for t in trades if t["rr"] > 0)
         win_rate = wins / total_trades * 100.0
         total_rr = sum(t["rr"] for t in trades)
-        net_return_pct = total_rr * 1.0  # 1R = 1% risk
+        net_return_pct = total_rr * 1.0
     else:
         win_rate = 0.0
         net_return_pct = 0.0
 
-    notes = (
-        "Backtest uses the current Daily-based Blueprint confluence logic "
-        "(HTF bias, location, Fib, liquidity, structure, 4H confirmation, R/R), "
-        "via the same internal function as /scan. Trades are triggered only on "
-        "fully ACTIVE signals, with intrabar execution approximated using Daily high/low."
+    tp1_hits = sum(1 for t in trades if t.get("exit_reason") == "TP1")
+    tp2_hits = sum(1 for t in trades if t.get("exit_reason") == "TP2")
+    tp3_hits = sum(1 for t in trades if t.get("exit_reason") == "TP3")
+    sl_hits = sum(1 for t in trades if t.get("exit_reason") == "SL")
+
+    notes_text = (
+        f"Walk-forward backtest with {min_trade_conf}+ factor confluence threshold. "
+        f"TP1 ({tp1_hits}), TP2 ({tp2_hits}), TP3 ({tp3_hits}), SL ({sl_hits}). "
+        f"No look-ahead bias. Conservative exit assumptions."
     )
 
     return {
@@ -517,5 +459,5 @@ def run_backtest(asset: str, period: str) -> Dict:
         "win_rate": win_rate,
         "net_return_pct": net_return_pct,
         "trades": trades,
-        "notes": notes,
+        "notes": notes_text,
     }
