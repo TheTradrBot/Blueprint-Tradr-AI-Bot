@@ -16,7 +16,7 @@ from typing import List, Dict, Tuple, Optional
 
 from data import get_ohlcv
 from config import SIGNAL_MODE
-from strategy import (
+from strategy_core import (
     _infer_trend,
     _pick_direction_from_bias,
     _compute_confluence_flags,

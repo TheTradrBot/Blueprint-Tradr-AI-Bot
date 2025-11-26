@@ -88,7 +88,7 @@ class StrategyParams:
 class Signal:
     """Represents a trading signal/setup."""
     symbol: str
-    direction: str  # "bullish" or "bearish"
+    direction: str
     bar_index: int
     timestamp: Any
     
@@ -151,6 +151,547 @@ class Trade:
             "exit_reason": self.exit_reason,
             "confluence_score": self.confluence_score,
         }
+
+
+def _atr(candles: List[Dict], period: int = 14) -> float:
+    """
+    Calculate Average True Range (ATR).
+    
+    Args:
+        candles: List of OHLCV candle dictionaries
+        period: ATR period (default 14)
+    
+    Returns:
+        ATR value or 0 if insufficient data
+    """
+    if len(candles) < period + 1:
+        return 0.0
+    
+    tr_values = []
+    for i in range(1, len(candles)):
+        high = candles[i]["high"]
+        low = candles[i]["low"]
+        prev_close = candles[i - 1]["close"]
+        
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
+        tr_values.append(tr)
+    
+    if len(tr_values) < period:
+        return sum(tr_values) / len(tr_values) if tr_values else 0.0
+    
+    atr_val = sum(tr_values[:period]) / period
+    for tr in tr_values[period:]:
+        atr_val = (atr_val * (period - 1) + tr) / period
+    
+    return atr_val
+
+
+def _find_pivots(candles: List[Dict], lookback: int = 5) -> Tuple[List[float], List[float]]:
+    """
+    Find swing highs and swing lows in candle data.
+    
+    Args:
+        candles: List of OHLCV candle dictionaries
+        lookback: Number of bars to look back/forward for pivot identification
+    
+    Returns:
+        Tuple of (swing_highs, swing_lows) as lists of price levels
+    """
+    if len(candles) < lookback * 2 + 1:
+        return [], []
+    
+    swing_highs = []
+    swing_lows = []
+    
+    for i in range(lookback, len(candles) - lookback):
+        high = candles[i]["high"]
+        low = candles[i]["low"]
+        
+        is_swing_high = True
+        is_swing_low = True
+        
+        for j in range(i - lookback, i + lookback + 1):
+            if j == i:
+                continue
+            if candles[j]["high"] > high:
+                is_swing_high = False
+            if candles[j]["low"] < low:
+                is_swing_low = False
+        
+        if is_swing_high:
+            swing_highs.append(high)
+        if is_swing_low:
+            swing_lows.append(low)
+    
+    return swing_highs, swing_lows
+
+
+def _infer_trend(candles: List[Dict], ema_short: int = 8, ema_long: int = 21) -> str:
+    """
+    Infer trend direction from candle data using EMA crossover and price action.
+    
+    Args:
+        candles: List of OHLCV candle dictionaries
+        ema_short: Short EMA period
+        ema_long: Long EMA period
+    
+    Returns:
+        "bullish", "bearish", or "mixed"
+    """
+    if not candles or len(candles) < ema_long + 5:
+        return "mixed"
+    
+    closes = [c["close"] for c in candles]
+    
+    def calc_ema(values: List[float], period: int) -> float:
+        if len(values) < period:
+            return sum(values) / len(values) if values else 0
+        k = 2 / (period + 1)
+        ema = sum(values[:period]) / period
+        for price in values[period:]:
+            ema = price * k + ema * (1 - k)
+        return ema
+    
+    ema_s = calc_ema(closes, ema_short)
+    ema_l = calc_ema(closes, ema_long)
+    
+    current_price = closes[-1]
+    recent_high = max(c["high"] for c in candles[-10:])
+    recent_low = min(c["low"] for c in candles[-10:])
+    
+    bullish_signals = 0
+    bearish_signals = 0
+    
+    if ema_s > ema_l:
+        bullish_signals += 1
+    else:
+        bearish_signals += 1
+    
+    if current_price > ema_l:
+        bullish_signals += 1
+    else:
+        bearish_signals += 1
+    
+    if len(closes) >= 20:
+        higher_highs = closes[-1] > max(closes[-10:-1]) if len(closes) > 10 else False
+        lower_lows = closes[-1] < min(closes[-10:-1]) if len(closes) > 10 else False
+        
+        if higher_highs:
+            bullish_signals += 1
+        if lower_lows:
+            bearish_signals += 1
+    
+    if bullish_signals > bearish_signals:
+        return "bullish"
+    elif bearish_signals > bullish_signals:
+        return "bearish"
+    else:
+        return "mixed"
+
+
+def _pick_direction_from_bias(
+    mn_trend: str,
+    wk_trend: str,
+    d_trend: str
+) -> Tuple[str, str, bool]:
+    """
+    Determine trade direction based on multi-timeframe bias.
+    
+    Args:
+        mn_trend: Monthly trend
+        wk_trend: Weekly trend
+        d_trend: Daily trend
+    
+    Returns:
+        Tuple of (direction, note, htf_aligned)
+    """
+    trends = [mn_trend, wk_trend, d_trend]
+    bullish_count = sum(1 for t in trends if t == "bullish")
+    bearish_count = sum(1 for t in trends if t == "bearish")
+    
+    if bullish_count >= 2:
+        direction = "bullish"
+        htf_aligned = mn_trend == "bullish" or wk_trend == "bullish"
+        note = f"HTF bias: {mn_trend.upper()[0]}/{wk_trend.upper()[0]}/{d_trend.upper()[0]} -> Bullish"
+    elif bearish_count >= 2:
+        direction = "bearish"
+        htf_aligned = mn_trend == "bearish" or wk_trend == "bearish"
+        note = f"HTF bias: {mn_trend.upper()[0]}/{wk_trend.upper()[0]}/{d_trend.upper()[0]} -> Bearish"
+    else:
+        direction = d_trend if d_trend != "mixed" else "bullish"
+        htf_aligned = False
+        note = f"HTF bias: Mixed ({mn_trend[0].upper()}/{wk_trend[0].upper()}/{d_trend[0].upper()})"
+    
+    return direction, note, htf_aligned
+
+
+def _location_context(
+    monthly_candles: List[Dict],
+    weekly_candles: List[Dict],
+    daily_candles: List[Dict],
+    price: float,
+    direction: str,
+) -> Tuple[str, bool]:
+    """
+    Check if price is at a key location (support/resistance zone).
+    
+    Returns:
+        Tuple of (note, is_valid_location)
+    """
+    if not daily_candles or len(daily_candles) < 20:
+        return "Location: Insufficient data", False
+    
+    highs = [c["high"] for c in daily_candles[-50:]] if len(daily_candles) >= 50 else [c["high"] for c in daily_candles]
+    lows = [c["low"] for c in daily_candles[-50:]] if len(daily_candles) >= 50 else [c["low"] for c in daily_candles]
+    
+    recent_high = max(highs[-20:])
+    recent_low = min(lows[-20:])
+    range_size = recent_high - recent_low
+    
+    if range_size <= 0:
+        return "Location: No range", False
+    
+    swing_highs, swing_lows = _find_pivots(daily_candles[-50:] if len(daily_candles) >= 50 else daily_candles, lookback=3)
+    
+    atr = _atr(daily_candles, 14)
+    zone_tolerance = atr * 0.5 if atr > 0 else range_size * 0.05
+    
+    if direction == "bullish":
+        near_support = any(abs(price - sl) < zone_tolerance for sl in swing_lows[-5:]) if swing_lows else False
+        near_range_low = (price - recent_low) < range_size * 0.3
+        
+        if near_support or near_range_low:
+            return "Location: Near support zone", True
+        else:
+            return "Location: Not at key support", False
+    else:
+        near_resistance = any(abs(price - sh) < zone_tolerance for sh in swing_highs[-5:]) if swing_highs else False
+        near_range_high = (recent_high - price) < range_size * 0.3
+        
+        if near_resistance or near_range_high:
+            return "Location: Near resistance zone", True
+        else:
+            return "Location: Not at key resistance", False
+
+
+def _fib_context(
+    weekly_candles: List[Dict],
+    daily_candles: List[Dict],
+    direction: str,
+    price: float,
+    fib_low: float = 0.382,
+    fib_high: float = 0.886,
+) -> Tuple[str, bool]:
+    """
+    Check if price is within a Fibonacci retracement zone.
+    
+    Returns:
+        Tuple of (note, is_in_fib_zone)
+    """
+    candles = daily_candles if len(daily_candles) >= 30 else weekly_candles
+    
+    if not candles or len(candles) < 20:
+        return "Fib: Insufficient data", False
+    
+    leg = _find_last_swing_leg_for_fib(candles, direction)
+    
+    if not leg:
+        return "Fib: No clear swing leg found", False
+    
+    lo, hi = leg
+    span = hi - lo
+    
+    if span <= 0:
+        return "Fib: Invalid swing range", False
+    
+    if direction == "bullish":
+        fib_382 = hi - span * 0.382
+        fib_500 = hi - span * 0.5
+        fib_618 = hi - span * 0.618
+        fib_786 = hi - span * 0.786
+        
+        if fib_786 <= price <= fib_382:
+            level = round((hi - price) / span, 3)
+            return f"Fib: Price at {level:.1%} retracement (Golden Pocket zone)", True
+        elif fib_618 <= price <= fib_500:
+            return "Fib: Price at 50-61.8% zone", True
+        else:
+            return "Fib: Price outside retracement zone", False
+    else:
+        fib_382 = lo + span * 0.382
+        fib_500 = lo + span * 0.5
+        fib_618 = lo + span * 0.618
+        fib_786 = lo + span * 0.786
+        
+        if fib_382 <= price <= fib_786:
+            level = round((price - lo) / span, 3)
+            return f"Fib: Price at {level:.1%} retracement (Golden Pocket zone)", True
+        elif fib_500 <= price <= fib_618:
+            return "Fib: Price at 50-61.8% zone", True
+        else:
+            return "Fib: Price outside retracement zone", False
+
+
+def _find_last_swing_leg_for_fib(candles: List[Dict], direction: str) -> Optional[Tuple[float, float]]:
+    """
+    Find the last swing leg for Fibonacci calculation.
+    
+    Returns:
+        Tuple of (swing_low, swing_high) or None
+    """
+    if len(candles) < 20:
+        return None
+    
+    swing_highs, swing_lows = _find_pivots(candles, lookback=3)
+    
+    if not swing_highs or not swing_lows:
+        highs = [c["high"] for c in candles[-30:]]
+        lows = [c["low"] for c in candles[-30:]]
+        return (min(lows), max(highs))
+    
+    recent_highs = swing_highs[-3:] if len(swing_highs) >= 3 else swing_highs
+    recent_lows = swing_lows[-3:] if len(swing_lows) >= 3 else swing_lows
+    
+    hi = max(recent_highs)
+    lo = min(recent_lows)
+    
+    return (lo, hi)
+
+
+def _daily_liquidity_context(candles: List[Dict], price: float) -> Tuple[str, bool]:
+    """
+    Check for liquidity sweep or proximity to liquidity pools.
+    
+    Returns:
+        Tuple of (note, is_near_liquidity)
+    """
+    if not candles or len(candles) < 10:
+        return "Liquidity: Insufficient data", False
+    
+    lookback = min(20, len(candles))
+    recent = candles[-lookback:]
+    
+    recent_highs = [c["high"] for c in recent]
+    recent_lows = [c["low"] for c in recent]
+    
+    equal_highs = []
+    equal_lows = []
+    
+    atr = _atr(candles, 14)
+    tolerance = atr * 0.2 if atr > 0 else (max(recent_highs) - min(recent_lows)) * 0.02
+    
+    for i, h in enumerate(recent_highs):
+        for j, h2 in enumerate(recent_highs):
+            if i != j and abs(h - h2) < tolerance:
+                equal_highs.append(h)
+                break
+    
+    for i, l in enumerate(recent_lows):
+        for j, l2 in enumerate(recent_lows):
+            if i != j and abs(l - l2) < tolerance:
+                equal_lows.append(l)
+                break
+    
+    near_equal_high = any(abs(price - h) < tolerance * 2 for h in equal_highs)
+    near_equal_low = any(abs(price - l) < tolerance * 2 for l in equal_lows)
+    
+    current = candles[-1]
+    prev = candles[-2] if len(candles) >= 2 else None
+    
+    swept_high = False
+    swept_low = False
+    
+    if prev:
+        prev_high = max(c["high"] for c in candles[-10:-1])
+        prev_low = min(c["low"] for c in candles[-10:-1])
+        
+        if current["high"] > prev_high and current["close"] < prev_high:
+            swept_high = True
+        if current["low"] < prev_low and current["close"] > prev_low:
+            swept_low = True
+    
+    if swept_high or swept_low:
+        return "Liquidity: Sweep detected", True
+    elif near_equal_high or near_equal_low:
+        return "Liquidity: Near equal highs/lows", True
+    else:
+        return "Liquidity: No clear liquidity zone", False
+
+
+def _structure_context(
+    monthly_candles: List[Dict],
+    weekly_candles: List[Dict],
+    daily_candles: List[Dict],
+    direction: str,
+) -> Tuple[bool, str]:
+    """
+    Check market structure alignment (BOS/CHoCH).
+    
+    Returns:
+        Tuple of (is_aligned, note)
+    """
+    if not daily_candles or len(daily_candles) < 10:
+        return False, "Structure: Insufficient data"
+    
+    swing_highs, swing_lows = _find_pivots(daily_candles[-30:], lookback=3)
+    
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return False, "Structure: Not enough swing points"
+    
+    if direction == "bullish":
+        higher_low = swing_lows[-1] > swing_lows[-2] if len(swing_lows) >= 2 else False
+        higher_high = swing_highs[-1] > swing_highs[-2] if len(swing_highs) >= 2 else False
+        
+        bos_up = daily_candles[-1]["close"] > max(swing_highs[-3:]) if swing_highs else False
+        
+        if bos_up:
+            return True, "Structure: BOS up confirmed"
+        elif higher_low and higher_high:
+            return True, "Structure: HH/HL pattern (bullish)"
+        elif higher_low:
+            return True, "Structure: Higher low formed"
+        else:
+            return False, "Structure: No bullish structure"
+    else:
+        lower_high = swing_highs[-1] < swing_highs[-2] if len(swing_highs) >= 2 else False
+        lower_low = swing_lows[-1] < swing_lows[-2] if len(swing_lows) >= 2 else False
+        
+        bos_down = daily_candles[-1]["close"] < min(swing_lows[-3:]) if swing_lows else False
+        
+        if bos_down:
+            return True, "Structure: BOS down confirmed"
+        elif lower_high and lower_low:
+            return True, "Structure: LH/LL pattern (bearish)"
+        elif lower_high:
+            return True, "Structure: Lower high formed"
+        else:
+            return False, "Structure: No bearish structure"
+
+
+def _h4_confirmation(
+    h4_candles: List[Dict],
+    direction: str,
+    daily_candles: List[Dict],
+) -> Tuple[str, bool]:
+    """
+    Check for 4H timeframe confirmation (entry trigger).
+    
+    Returns:
+        Tuple of (note, is_confirmed)
+    """
+    candles = h4_candles if h4_candles and len(h4_candles) >= 5 else daily_candles[-10:]
+    
+    if not candles or len(candles) < 3:
+        return "4H: Insufficient data", False
+    
+    last = candles[-1]
+    prev = candles[-2]
+    
+    body_last = abs(last["close"] - last["open"])
+    range_last = last["high"] - last["low"]
+    body_ratio = body_last / range_last if range_last > 0 else 0
+    
+    if direction == "bullish":
+        bullish_candle = last["close"] > last["open"]
+        engulfing = (
+            last["close"] > last["open"] and
+            prev["close"] < prev["open"] and
+            last["close"] > prev["open"] and
+            last["open"] < prev["close"]
+        )
+        
+        lower_wick = last["open"] - last["low"] if last["close"] > last["open"] else last["close"] - last["low"]
+        upper_wick = last["high"] - last["close"] if last["close"] > last["open"] else last["high"] - last["open"]
+        pin_bar = lower_wick > body_last * 2 and upper_wick < body_last * 0.5
+        
+        bos_check = last["high"] > max(c["high"] for c in candles[-5:-1]) if len(candles) >= 5 else False
+        
+        if engulfing:
+            return "4H: Bullish engulfing confirmed", True
+        elif pin_bar:
+            return "4H: Bullish pin bar (rejection)", True
+        elif bos_check and bullish_candle:
+            return "4H: Break of structure up", True
+        elif bullish_candle and body_ratio > 0.6:
+            return "4H: Strong bullish candle", True
+        else:
+            return "4H: Awaiting bullish confirmation", False
+    else:
+        bearish_candle = last["close"] < last["open"]
+        engulfing = (
+            last["close"] < last["open"] and
+            prev["close"] > prev["open"] and
+            last["close"] < prev["open"] and
+            last["open"] > prev["close"]
+        )
+        
+        upper_wick = last["high"] - last["open"] if last["close"] < last["open"] else last["high"] - last["close"]
+        lower_wick = last["close"] - last["low"] if last["close"] < last["open"] else last["open"] - last["low"]
+        pin_bar = upper_wick > body_last * 2 and lower_wick < body_last * 0.5
+        
+        bos_check = last["low"] < min(c["low"] for c in candles[-5:-1]) if len(candles) >= 5 else False
+        
+        if engulfing:
+            return "4H: Bearish engulfing confirmed", True
+        elif pin_bar:
+            return "4H: Bearish pin bar (rejection)", True
+        elif bos_check and bearish_candle:
+            return "4H: Break of structure down", True
+        elif bearish_candle and body_ratio > 0.6:
+            return "4H: Strong bearish candle", True
+        else:
+            return "4H: Awaiting bearish confirmation", False
+
+
+def _find_structure_sl(candles: List[Dict], direction: str, lookback: int = 35) -> Optional[float]:
+    """
+    Find structure-based stop loss level.
+    
+    Returns:
+        Stop loss price level or None
+    """
+    if not candles or len(candles) < 5:
+        return None
+    
+    recent = candles[-lookback:] if len(candles) >= lookback else candles
+    swing_highs, swing_lows = _find_pivots(recent, lookback=3)
+    
+    if direction == "bullish":
+        if swing_lows:
+            return min(swing_lows[-3:]) if len(swing_lows) >= 3 else min(swing_lows)
+        else:
+            return min(c["low"] for c in recent[-10:])
+    else:
+        if swing_highs:
+            return max(swing_highs[-3:]) if len(swing_highs) >= 3 else max(swing_highs)
+        else:
+            return max(c["high"] for c in recent[-10:])
+
+
+def _compute_confluence_flags(
+    monthly_candles: List[Dict],
+    weekly_candles: List[Dict],
+    daily_candles: List[Dict],
+    h4_candles: List[Dict],
+    direction: str,
+    params: Optional[StrategyParams] = None,
+) -> Tuple[Dict[str, bool], Dict[str, str], Tuple]:
+    """
+    Compute all confluence flags for a trading setup.
+    
+    This is the main entry point for confluence calculation,
+    used by both backtests and live scanning.
+    
+    Returns:
+        Tuple of (flags dict, notes dict, trade_levels tuple)
+    """
+    return compute_confluence(
+        monthly_candles, weekly_candles, daily_candles, h4_candles, direction, params
+    )
 
 
 def compute_confluence(
@@ -526,6 +1067,11 @@ def simulate_trades(
         tp1_hit = False
         trailing_sl = sl
         
+        reward = 0.0
+        rr = 0.0
+        is_winner = False
+        exit_reason = ""
+        
         for exit_bar in range(entry_bar + 1, len(candles)):
             c = candles[exit_bar]
             high = c["high"]
@@ -651,8 +1197,11 @@ def get_aggressive_params() -> StrategyParams:
         min_confluence=1,
         min_quality_factors=0,
         require_confirmation_for_active=False,
-        require_htf_alignment=False,
-        cooldown_bars=0,
+        require_rr_for_active=False,
+        atr_sl_multiplier=1.2,
+        atr_tp1_multiplier=0.5,
+        atr_tp2_multiplier=1.0,
+        atr_tp3_multiplier=1.5,
     )
 
 
@@ -661,9 +1210,10 @@ def get_conservative_params() -> StrategyParams:
     return StrategyParams(
         min_confluence=4,
         min_quality_factors=2,
-        require_confirmation_for_active=True,
         require_htf_alignment=True,
-        cooldown_bars=5,
+        require_confirmation_for_active=True,
+        require_rr_for_active=True,
+        atr_sl_multiplier=1.8,
         atr_tp1_multiplier=0.8,
         atr_tp2_multiplier=1.5,
         atr_tp3_multiplier=2.5,

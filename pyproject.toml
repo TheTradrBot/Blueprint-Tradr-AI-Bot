@@ -7,6 +7,5 @@ requires-python = ">=3.11"
 dependencies = [
     "discord-py>=2.6.4",
     "pandas>=2.3.3",
-    "py-cord>=2.6.1",
     "requests>=2.32.5",
 ]

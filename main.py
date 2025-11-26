@@ -1,5 +1,6 @@
 import discord
-from discord.ext import tasks
+from discord import app_commands
+from discord.ext import commands, tasks
 
 from config import (
     DISCORD_TOKEN,
@@ -136,11 +137,11 @@ async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
             if direction == "bullish" and price <= sl:
                 progress["sl"] = True
                 closed = True
-                events.append(f"❌ **SL hit** at {price:.5f}")
+                events.append(f"**SL hit** at {price:.5f}")
             elif direction == "bearish" and price >= sl:
                 progress["sl"] = True
                 closed = True
-                events.append(f"❌ **SL hit** at {price:.5f}")
+                events.append(f"**SL hit** at {price:.5f}")
 
         tp_levels = [
             ("TP1", "tp1", trade.tp1),
@@ -157,17 +158,17 @@ async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
 
                 if direction == "bullish" and price >= level:
                     progress[flag] = True
-                    events.append(f"✅ **{label} hit** at {price:.5f}")
+                    events.append(f"**{label} hit** at {price:.5f}")
                 elif direction == "bearish" and price <= level:
                     progress[flag] = True
-                    events.append(f"✅ **{label} hit** at {price:.5f}")
+                    events.append(f"**{label} hit** at {price:.5f}")
 
         if not events:
             continue
 
-        emoji = "🟢" if direction == "bullish" else "🔴"
+        emoji = "[BULL]" if direction == "bullish" else "[BEAR]"
         lines: list[str] = []
-        lines.append(f"🔔 **Trade Update**")
+        lines.append(f"**Trade Update**")
         lines.append(f"{emoji} {trade.symbol} | {direction.upper()}")
         if entry is not None:
             lines.append(f"Entry: {entry:.5f}")
@@ -181,29 +182,37 @@ async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
             closed = True
 
         if closed:
-            lines.append("📋 Trade closed.")
+            lines.append("Trade closed.")
             ACTIVE_TRADES.pop(key, None)
             TRADE_PROGRESS.pop(key, None)
 
         await updates_channel.send("\n".join(lines)[:1900])
 
 
-intents = discord.Intents.default()
-intents.message_content = True
+class BlueprintTraderBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix="!", intents=intents)
 
-bot = discord.Bot(intents=intents)
+    async def setup_hook(self):
+        await self.tree.sync()
+        print("Slash commands synced!")
+
+
+bot = BlueprintTraderBot()
 
 
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print("Blueprint Trader AI is online.")
     if not autoscan_loop.is_running():
         autoscan_loop.start()
 
 
-@bot.slash_command(description="Show all available commands.")
-async def help(ctx: discord.ApplicationContext):
+@bot.tree.command(name="help", description="Show all available commands.")
+async def help_command(interaction: discord.Interaction):
     commands_text = """
 **Blueprint Trader AI - Commands**
 
@@ -227,160 +236,134 @@ async def help(ctx: discord.ApplicationContext):
 `/cache` - View cache statistics
 `/clearcache` - Clear data cache
 """
-    await ctx.respond(commands_text, ephemeral=True)
+    await interaction.response.send_message(commands_text, ephemeral=True)
 
 
-@bot.slash_command(description="Scan a single asset with full analysis.")
-async def scan(ctx: discord.ApplicationContext, asset: str):
-    await ctx.defer()
+@bot.tree.command(name="scan", description="Scan a single asset with full analysis.")
+@app_commands.describe(asset="The asset symbol to scan (e.g., EUR_USD, BTC_USD)")
+async def scan(interaction: discord.Interaction, asset: str):
+    await interaction.response.defer()
     
     result = scan_single_asset(asset.upper().replace("/", "_"))
 
     if not result:
-        await ctx.respond(f"❌ No data available for **{asset}**. Check the instrument name.")
+        await interaction.followup.send(f"No data available for **{asset}**. Check the instrument name.")
         return
 
     if result.confluence_score < 3:
         status_msg = (
-            f"📊 **{result.symbol}** | {result.direction.upper()}\n"
+            f"**{result.symbol}** | {result.direction.upper()}\n"
             f"Confluence: {result.confluence_score}/7\n\n"
             f"_Low confluence - no actionable setup at this time._"
         )
-        await ctx.respond(status_msg)
+        await interaction.followup.send(status_msg)
         return
 
     msg = format_detailed_scan(result)
     chunks = split_message(msg, limit=1900)
 
-    first = True
-    for chunk in chunks:
-        if first:
-            await ctx.respond(chunk)
-            first = False
+    for i, chunk in enumerate(chunks):
+        if i == 0:
+            await interaction.followup.send(chunk)
         else:
-            await ctx.followup.send(chunk)
+            await interaction.followup.send(chunk)
 
 
-@bot.slash_command(description="Scan all forex pairs.")
-async def forex(ctx: discord.ApplicationContext):
-    await ctx.defer()
+@bot.tree.command(name="forex", description="Scan all forex pairs.")
+async def forex(interaction: discord.Interaction):
+    await interaction.response.defer()
     scan_results, _ = scan_forex()
 
     if not scan_results:
-        await ctx.respond("📊 **Forex** - No setups found.")
+        await interaction.followup.send("**Forex** - No setups found.")
         return
 
     msg = format_scan_group("Forex", scan_results)
     chunks = split_message(msg, limit=1900)
 
-    first = True
     for chunk in chunks:
-        if first:
-            await ctx.respond(chunk)
-            first = False
-        else:
-            await ctx.followup.send(chunk)
+        await interaction.followup.send(chunk)
 
 
-@bot.slash_command(description="Scan crypto assets.")
-async def crypto(ctx: discord.ApplicationContext):
-    await ctx.defer()
+@bot.tree.command(name="crypto", description="Scan crypto assets.")
+async def crypto(interaction: discord.Interaction):
+    await interaction.response.defer()
     scan_results, _ = scan_crypto()
 
     if not scan_results:
-        await ctx.respond("📊 **Crypto** - No setups found.")
+        await interaction.followup.send("**Crypto** - No setups found.")
         return
 
     msg = format_scan_group("Crypto", scan_results)
     chunks = split_message(msg, limit=1900)
 
-    first = True
     for chunk in chunks:
-        if first:
-            await ctx.respond(chunk)
-            first = False
-        else:
-            await ctx.followup.send(chunk)
+        await interaction.followup.send(chunk)
 
 
-@bot.slash_command(description="Scan commodities (metals + energies).")
-async def com(ctx: discord.ApplicationContext):
-    await ctx.defer()
+@bot.tree.command(name="com", description="Scan commodities (metals + energies).")
+async def com(interaction: discord.Interaction):
+    await interaction.response.defer()
     scan_results_m, _ = scan_metals()
     scan_results_e, _ = scan_energies()
     combined = scan_results_m + scan_results_e
 
     if not combined:
-        await ctx.respond("📊 **Commodities** - No setups found.")
+        await interaction.followup.send("**Commodities** - No setups found.")
         return
 
     msg = format_scan_group("Commodities", combined)
     chunks = split_message(msg, limit=1900)
 
-    first = True
     for chunk in chunks:
-        if first:
-            await ctx.respond(chunk)
-            first = False
-        else:
-            await ctx.followup.send(chunk)
+        await interaction.followup.send(chunk)
 
 
-@bot.slash_command(description="Scan stock indices.")
-async def indices(ctx: discord.ApplicationContext):
-    await ctx.defer()
+@bot.tree.command(name="indices", description="Scan stock indices.")
+async def indices(interaction: discord.Interaction):
+    await interaction.response.defer()
     scan_results, _ = scan_indices()
 
     if not scan_results:
-        await ctx.respond("📊 **Indices** - No setups found.")
+        await interaction.followup.send("**Indices** - No setups found.")
         return
 
     msg = format_scan_group("Indices", scan_results)
     chunks = split_message(msg, limit=1900)
 
-    first = True
     for chunk in chunks:
-        if first:
-            await ctx.respond(chunk)
-            first = False
-        else:
-            await ctx.followup.send(chunk)
+        await interaction.followup.send(chunk)
 
 
-@bot.slash_command(description="Full market scan across all asset classes.")
-async def market(ctx: discord.ApplicationContext):
-    await ctx.defer()
+@bot.tree.command(name="market", description="Full market scan across all asset classes.")
+async def market(interaction: discord.Interaction):
+    await interaction.response.defer()
     markets = scan_all_markets()
 
     messages = format_autoscan_output(markets)
     
     if not messages:
-        await ctx.respond("📊 **Market Scan** - No setups found.")
+        await interaction.followup.send("**Market Scan** - No setups found.")
         return
 
-    first_message_sent = False
     for msg in messages:
         chunks = split_message(msg, limit=1900)
         for chunk in chunks:
-            if not first_message_sent:
-                await ctx.respond(chunk)
-                first_message_sent = True
-            else:
-                await ctx.followup.send(chunk)
+            await interaction.followup.send(chunk)
 
 
-@bot.slash_command(description="Show active trades with status.")
-async def trade(ctx: discord.ApplicationContext):
+@bot.tree.command(name="trade", description="Show active trades with status.")
+async def trade(interaction: discord.Interaction):
     if not ACTIVE_TRADES:
-        await ctx.respond("📋 No active trades being tracked.")
+        await interaction.response.send_message("No active trades being tracked.")
         return
 
     lines: list[str] = []
-    lines.append("📈 **Active Trades**")
+    lines.append("**Active Trades**")
     lines.append("")
 
     for key, t in ACTIVE_TRADES.items():
-        emoji = "🟢" if t.direction == "bullish" else "🔴"
+        emoji = "[BULL]" if t.direction == "bullish" else "[BEAR]"
         entry = t.entry if t.entry is not None else 0.0
         sl = t.stop_loss if t.stop_loss is not None else 0.0
 
@@ -392,12 +375,12 @@ async def trade(ctx: discord.ApplicationContext):
         lines.append("")
 
     msg = "\n".join(lines)
-    await ctx.respond(msg[:2000])
+    await interaction.response.send_message(msg[:2000])
 
 
-@bot.slash_command(description="Show latest prices for all assets.")
-async def live(ctx: discord.ApplicationContext):
-    await ctx.defer()
+@bot.tree.command(name="live", description="Show latest prices for all assets.")
+async def live(interaction: discord.Interaction):
+    await interaction.response.defer()
     groups = {
         "Forex": FOREX_PAIRS,
         "Metals": METALS,
@@ -407,7 +390,7 @@ async def live(ctx: discord.ApplicationContext):
     }
 
     lines: list[str] = []
-    lines.append("📊 **Live Prices**")
+    lines.append("**Live Prices**")
     lines.append("")
 
     for name, symbols in groups.items():
@@ -429,54 +412,53 @@ async def live(ctx: discord.ApplicationContext):
     msg = "\n".join(lines)
     chunks = split_message(msg, limit=1900)
 
-    first = True
     for chunk in chunks:
-        if first:
-            await ctx.respond(chunk)
-            first = False
-        else:
-            await ctx.followup.send(chunk)
+        await interaction.followup.send(chunk)
 
 
-@bot.slash_command(description='Backtest the strategy. Example: /backtest EUR_USD "Jan 2024 - Dec 2024"')
-async def backtest(ctx: discord.ApplicationContext, asset: str, period: str):
-    await ctx.defer()
+@bot.tree.command(name="backtest", description='Backtest the strategy. Example: /backtest EUR_USD "Jan 2024 - Dec 2024"')
+@app_commands.describe(
+    asset="The asset to backtest (e.g., EUR_USD)",
+    period="The time period (e.g., 'Jan 2024 - Dec 2024')"
+)
+async def backtest_cmd(interaction: discord.Interaction, asset: str, period: str):
+    await interaction.response.defer()
     
     result = run_backtest(asset.upper().replace("/", "_"), period)
 
     msg = format_backtest_result(result)
-    await ctx.respond(msg)
+    await interaction.followup.send(msg)
 
 
-@bot.slash_command(description="View cache statistics.")
-async def cache(ctx: discord.ApplicationContext):
+@bot.tree.command(name="cache", description="View cache statistics.")
+async def cache_cmd(interaction: discord.Interaction):
     stats = get_cache_stats()
     
     msg = (
-        f"📦 **Cache Statistics**\n\n"
+        f"**Cache Statistics**\n\n"
         f"Cached Items: {stats['cached_items']}\n"
         f"Hit Rate: {stats['hit_rate_pct']}%\n"
         f"Hits: {stats['hits']} | Misses: {stats['misses']}"
     )
-    await ctx.respond(msg, ephemeral=True)
+    await interaction.response.send_message(msg, ephemeral=True)
 
 
-@bot.slash_command(description="Clear the data cache.")
-async def clearcache(ctx: discord.ApplicationContext):
+@bot.tree.command(name="clearcache", description="Clear the data cache.")
+async def clearcache(interaction: discord.Interaction):
     clear_cache()
-    await ctx.respond("✅ Cache cleared successfully.", ephemeral=True)
+    await interaction.response.send_message("Cache cleared successfully.", ephemeral=True)
 
 
 @tasks.loop(hours=SCAN_INTERVAL_HOURS)
 async def autoscan_loop():
     await bot.wait_until_ready()
-    print("⏱️ Running 4H autoscan...")
+    print("Running 4H autoscan...")
 
     scan_channel = bot.get_channel(SCAN_CHANNEL_ID)
     trades_channel = bot.get_channel(TRADES_CHANNEL_ID)
 
     if scan_channel is None:
-        print("❌ Scan channel not found.")
+        print("Scan channel not found.")
         return
 
     markets = scan_all_markets()
@@ -500,9 +482,9 @@ async def autoscan_loop():
                 ACTIVE_TRADES[trade_key] = trade
                 _ensure_trade_progress(trade_key)
 
-                emoji = "🟢" if trade.direction == "bullish" else "🔴"
+                emoji = "[BULL]" if trade.direction == "bullish" else "[BEAR]"
                 t_lines: list[str] = []
-                t_lines.append(f"🎯 **New Trade Signal**")
+                t_lines.append(f"**New Trade Signal**")
                 t_lines.append(f"{emoji} {trade.symbol} | {trade.direction.upper()}")
                 t_lines.append(f"Confluence: {trade.confluence_score}/7")
 
@@ -517,7 +499,7 @@ async def autoscan_loop():
     if updates_channel is not None and ACTIVE_TRADES:
         await check_trade_updates(updates_channel)
 
-    print("✅ Autoscan finished.")
+    print("Autoscan finished.")
 
 
 if not DISCORD_TOKEN:
