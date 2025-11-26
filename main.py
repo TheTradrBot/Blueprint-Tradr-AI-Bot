@@ -35,12 +35,24 @@ from formatting import (
     format_backtest_result,
 )
 
+from discord_output import (
+    create_setup_embed,
+    create_tp_hit_embed,
+    create_sl_hit_embed,
+    create_trade_closed_embed,
+    build_confluence_list,
+)
+
+from position_sizing import calculate_position_size_5ers
+from config import ACCOUNT_SIZE, RISK_PER_TRADE_PCT
+
 from backtest import run_backtest
 from data import get_ohlcv, get_cache_stats, clear_cache
 
 
 ACTIVE_TRADES: dict[str, ScanResult] = {}
 TRADE_PROGRESS: dict[str, dict[str, bool]] = {}
+TRADE_SIZING: dict[str, dict] = {}
 
 
 def split_message(text: str, limit: int = 1900) -> list[str]:
@@ -130,64 +142,109 @@ async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
         entry = trade.entry
         sl = trade.stop_loss
         direction = trade.direction.lower()
+        
+        sizing = TRADE_SIZING.get(key, {})
+        risk_usd = sizing.get("risk_usd", ACCOUNT_SIZE * RISK_PER_TRADE_PCT)
+        lot_size = sizing.get("lot_size", 1.0)
 
-        events: list[str] = []
         closed = False
+        embeds_to_send = []
 
         if sl is not None and not progress["sl"]:
-            if direction == "bullish" and price <= sl:
+            if (direction == "bullish" and price <= sl) or (direction == "bearish" and price >= sl):
                 progress["sl"] = True
                 closed = True
-                events.append(f"**SL hit** at {price:.5f}")
-            elif direction == "bearish" and price >= sl:
-                progress["sl"] = True
-                closed = True
-                events.append(f"**SL hit** at {price:.5f}")
+                
+                embed = create_sl_hit_embed(
+                    symbol=trade.symbol,
+                    direction=direction,
+                    sl_price=sl,
+                    result_usd=-risk_usd,
+                    result_pct=-RISK_PER_TRADE_PCT * 100,
+                    result_r=-1.0,
+                )
+                embeds_to_send.append(embed)
 
         tp_levels = [
-            ("TP1", "tp1", trade.tp1),
-            ("TP2", "tp2", trade.tp2),
-            ("TP3", "tp3", trade.tp3),
-            ("TP4", "tp4", trade.tp4),
-            ("TP5", "tp5", trade.tp5),
+            ("TP1", "tp1", trade.tp1, 1),
+            ("TP2", "tp2", trade.tp2, 2),
+            ("TP3", "tp3", trade.tp3, 3),
         ]
 
         if not progress["sl"]:
-            for label, flag, level in tp_levels:
+            risk = abs(entry - sl) if entry and sl else 1.0
+            
+            for label, flag, level, tp_num in tp_levels:
                 if level is None or progress[flag]:
                     continue
 
+                hit = False
                 if direction == "bullish" and price >= level:
-                    progress[flag] = True
-                    events.append(f"**{label} hit** at {price:.5f}")
+                    hit = True
                 elif direction == "bearish" and price <= level:
+                    hit = True
+                
+                if hit:
                     progress[flag] = True
-                    events.append(f"**{label} hit** at {price:.5f}")
-
-        if not events:
-            continue
-
-        emoji = "[BULL]" if direction == "bullish" else "[BEAR]"
-        lines: list[str] = []
-        lines.append(f"**Trade Update**")
-        lines.append(f"{emoji} {trade.symbol} | {direction.upper()}")
-        if entry is not None:
-            lines.append(f"Entry: {entry:.5f}")
-        lines.extend(events)
+                    
+                    if direction == "bullish":
+                        rr = (level - entry) / risk if risk > 0 else 0
+                    else:
+                        rr = (entry - level) / risk if risk > 0 else 0
+                    
+                    realized_usd = risk_usd * rr
+                    realized_pct = RISK_PER_TRADE_PCT * rr * 100
+                    
+                    remaining_pct = 100 - (tp_num * 33.3)
+                    remaining_lots = lot_size * (remaining_pct / 100)
+                    
+                    embed = create_tp_hit_embed(
+                        symbol=trade.symbol,
+                        direction=direction,
+                        tp_level=tp_num,
+                        tp_price=level,
+                        realized_usd=realized_usd,
+                        realized_pct=realized_pct,
+                        realized_r=rr,
+                        remaining_pct=max(0, remaining_pct),
+                        remaining_lots=max(0, remaining_lots),
+                        current_sl=entry if tp_num == 1 else None,
+                        moved_to_be=(tp_num == 1),
+                    )
+                    embeds_to_send.append(embed)
 
         all_tps_hit = all(
-            progress[flag] for label, flag, level in tp_levels if level is not None
+            progress[flag] for label, flag, level, _ in tp_levels if level is not None
         )
 
         if progress["sl"] or all_tps_hit:
             closed = True
 
         if closed:
-            lines.append("Trade closed.")
+            if all_tps_hit and not progress["sl"]:
+                risk = abs(entry - sl) if entry and sl else 1.0
+                total_rr = sum(
+                    ((level - entry) / risk if direction == "bullish" else (entry - level) / risk)
+                    for _, _, level, _ in tp_levels if level is not None
+                ) / 3
+                
+                embed = create_trade_closed_embed(
+                    symbol=trade.symbol,
+                    direction=direction,
+                    avg_exit=price,
+                    total_result_usd=risk_usd * total_rr,
+                    total_result_pct=RISK_PER_TRADE_PCT * total_rr * 100,
+                    total_result_r=total_rr,
+                    exit_reason="All TPs Hit",
+                )
+                embeds_to_send.append(embed)
+            
             ACTIVE_TRADES.pop(key, None)
             TRADE_PROGRESS.pop(key, None)
+            TRADE_SIZING.pop(key, None)
 
-        await updates_channel.send("\n".join(lines)[:1900])
+        for embed in embeds_to_send:
+            await updates_channel.send(embed=embed)
 
 
 class BlueprintTraderBot(commands.Bot):
@@ -487,18 +544,31 @@ async def autoscan_loop():
                 ACTIVE_TRADES[trade_key] = trade
                 _ensure_trade_progress(trade_key)
 
-                emoji = "[BULL]" if trade.direction == "bullish" else "[BEAR]"
-                t_lines: list[str] = []
-                t_lines.append(f"**New Trade Signal**")
-                t_lines.append(f"{emoji} {trade.symbol} | {trade.direction.upper()}")
-                t_lines.append(f"Confluence: {trade.confluence_score}/7")
-
-                if trade.entry is not None and trade.stop_loss is not None:
-                    t_lines.append(f"Entry: {trade.entry:.5f} | SL: {trade.stop_loss:.5f}")
-                if trade.tp1 is not None:
-                    t_lines.append(f"TP1: {trade.tp1:.5f} | TP2: {trade.tp2:.5f} | TP3: {trade.tp3:.5f}")
-
-                await trades_channel.send("\n".join(t_lines)[:1900])
+                confluence_items = build_confluence_list(trade)
+                
+                sizing = calculate_position_size_5ers(
+                    symbol=trade.symbol,
+                    entry_price=trade.entry,
+                    stop_price=trade.stop_loss,
+                )
+                
+                TRADE_SIZING[trade_key] = sizing
+                
+                embed = create_setup_embed(
+                    symbol=trade.symbol,
+                    direction=trade.direction,
+                    timeframe="H4",
+                    entry=trade.entry,
+                    stop_loss=trade.stop_loss,
+                    tp1=trade.tp1,
+                    tp2=trade.tp2,
+                    tp3=trade.tp3,
+                    confluence_score=trade.confluence_score,
+                    confluence_items=confluence_items,
+                    description=f"High-confluence setup with {trade.confluence_score}/7 factors aligned.",
+                )
+                
+                await trades_channel.send(embed=embed)
 
     updates_channel = bot.get_channel(TRADE_UPDATES_CHANNEL_ID)
     if updates_channel is not None and ACTIVE_TRADES:

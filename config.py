@@ -9,6 +9,36 @@ You keep:
 
 import os
 
+
+# ==== 5%ers 100K High Stakes Risk Model ====
+
+ACCOUNT_CURRENCY = "USD"
+ACCOUNT_SIZE = 100_000
+MAX_DAILY_LOSS_PCT = 0.05
+MAX_TOTAL_LOSS_PCT = 0.10
+RISK_PER_TRADE_PCT = 0.01
+MAX_OPEN_RISK_PCT = 0.03
+MIN_WITHDRAWAL_USD = 150
+
+CONTRACT_SPECS = {
+    "USD_JPY": {"pip_value": 0.01, "contract_size": 100000, "pip_location": 2},
+    "GBP_USD": {"pip_value": 0.0001, "contract_size": 100000, "pip_location": 4},
+    "EUR_USD": {"pip_value": 0.0001, "contract_size": 100000, "pip_location": 4},
+    "NZD_USD": {"pip_value": 0.0001, "contract_size": 100000, "pip_location": 4},
+    "AUD_USD": {"pip_value": 0.0001, "contract_size": 100000, "pip_location": 4},
+    "USD_CHF": {"pip_value": 0.0001, "contract_size": 100000, "pip_location": 4},
+    "USD_CAD": {"pip_value": 0.0001, "contract_size": 100000, "pip_location": 4},
+    "XAU_USD": {"pip_value": 0.01, "contract_size": 100, "pip_location": 2},
+    "XAG_USD": {"pip_value": 0.001, "contract_size": 5000, "pip_location": 3},
+    "NAS100_USD": {"pip_value": 1.0, "contract_size": 1, "pip_location": 0},
+    "SPX500_USD": {"pip_value": 1.0, "contract_size": 1, "pip_location": 0},
+    "WTICO_USD": {"pip_value": 0.01, "contract_size": 1000, "pip_location": 2},
+    "BCO_USD": {"pip_value": 0.01, "contract_size": 1000, "pip_location": 2},
+    "BTC_USD": {"pip_value": 1.0, "contract_size": 1, "pip_location": 0},
+    "ETH_USD": {"pip_value": 0.01, "contract_size": 1, "pip_location": 2},
+}
+
+
 # How strict the confluence engine is.
 # "standard"  = balanced trades and quality (recommended for live trading)
 # "aggressive" = more trades, looser filters (for experimentation/backtesting)

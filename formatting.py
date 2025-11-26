@@ -231,42 +231,44 @@ def format_trade_update(symbol: str, direction: str, event_type: str, price: flo
 
 
 def format_backtest_result(result: dict) -> str:
-    """Format backtest results for Discord."""
+    """Format backtest results for Discord with 5%ers 100K model."""
     asset = result.get("asset", "Unknown")
     period = result.get("period", "Unknown")
     total = result.get("total_trades", 0)
     win_rate = result.get("win_rate", 0.0)
     net_return = result.get("net_return_pct", 0.0)
-    trades = result.get("trades", [])
-    notes = result.get("notes", "")
+    total_profit_usd = result.get("total_profit_usd", 0.0)
+    max_drawdown_pct = result.get("max_drawdown_pct", 0.0)
+    avg_rr = result.get("avg_rr", 0.0)
+    account_size = result.get("account_size", 100000)
     
-    tp1_count = sum(1 for t in trades if t.get("exit_reason") == "TP1")
-    tp2_count = sum(1 for t in trades if t.get("exit_reason") == "TP2")
-    tp3_count = sum(1 for t in trades if t.get("exit_reason") == "TP3")
-    sl_count = sum(1 for t in trades if t.get("exit_reason") == "SL")
+    tp1_trail = result.get("tp1_trail_hits", 0)
+    tp2_count = result.get("tp2_hits", 0)
+    tp3_count = result.get("tp3_hits", 0)
+    sl_count = result.get("sl_hits", 0)
     
-    profit_emoji = "📈" if net_return > 0 else "📉" if net_return < 0 else "➖"
+    profit_emoji = "📈" if total_profit_usd > 0 else "📉" if total_profit_usd < 0 else "➖"
     wr_emoji = "🎯" if win_rate >= 70 else "📊" if win_rate >= 50 else "⚠️"
+    
+    sign = "+" if total_profit_usd >= 0 else ""
     
     lines = [
         f"📊 **Backtest Results - {asset}**",
-        f"Period: {period}",
+        f"Period: {period} | Account: ${account_size:,.0f} (5%ers High Stakes)",
         "",
         f"**Performance:**",
-        f"{profit_emoji} Net Return: **{net_return:+.1f}%** (1% risk/trade)",
+        f"{profit_emoji} Total Profit: **{sign}${total_profit_usd:,.0f}** ({sign}{net_return:.1f}%)",
         f"{wr_emoji} Win Rate: **{win_rate:.1f}%** ({total} trades)",
+        f"📉 Max Drawdown: **{max_drawdown_pct:.1f}%**",
+        f"📈 Expectancy: **{avg_rr:+.2f}R** / trade",
         "",
         f"**Exit Breakdown:**",
-        f"• TP1: {tp1_count} | TP2: {tp2_count} | TP3: {tp3_count}",
+        f"• TP1+Trail: {tp1_trail} | TP2: {tp2_count} | TP3: {tp3_count}",
         f"• SL: {sl_count}",
     ]
     
-    if total > 0:
-        avg_win = sum(t["rr"] for t in trades if t["rr"] > 0) / max(1, sum(1 for t in trades if t["rr"] > 0))
-        avg_loss = abs(sum(t["rr"] for t in trades if t["rr"] < 0) / max(1, sum(1 for t in trades if t["rr"] < 0)))
-        lines.append("")
-        lines.append(f"**Risk Stats:**")
-        lines.append(f"• Avg Win: {avg_win:.1f}R | Avg Loss: {avg_loss:.1f}R")
+    lines.append("")
+    lines.append("_5%ers 100K Risk Model • 1% risk per trade_")
     
     return "\n".join(lines)
 

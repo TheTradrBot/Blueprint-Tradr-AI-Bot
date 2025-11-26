@@ -1,0 +1,318 @@
+Here’s how I’d do it:
+
+---
+
+### Quick 5%ers 100K High Stakes facts (for you + the prompt)
+
+From the official High Stakes page and FAQ, a 100K High Stakes account roughly has:
+
+* **Account size:** 100,000 USD (demo-based prop account)
+* **Max daily loss:** **5%** of the higher of starting balance/equity for that day
+* **Max total loss (absolute drawdown):** **10%** of initial balance (so account is breached below 90,000)
+* **Payouts:**
+
+  * First withdrawal **14 days** after you get funded, then **every 2 weeks**
+  * **Minimum withdrawal ~150 USD**, profits beyond that can be withdrawn or left to increase your buffer
+* **Scaling:** 100K High Stakes can scale via repeated **10% growth steps** up to 500K+ with increasing profit split and fixed monthly payouts at high balances
+* **EAs:** Allowed **as long as** they don’t do signal copying, tick scalping, arbitrage, HFT, “stealth” stops, etc., and **every trade must have a visible stop-loss** on the platform.
+
+The prompt below bakes these constraints into risk + sizing logic for the bot/backtest and designs the Discord output style.
+
+---
+
+## Master prompt for Replit Agent – Discord output + 100K 5%ers risk model
+
+You can paste this whole thing into the Replit Agent for your Blueprint bot:
+
+````text
+You are an expert Python developer and Discord bot designer working on the Blueprint-Tradr-AI-Bot (cloned from https://github.com/TheTradrBot/Blueprint-Tradr-AI-Bot).
+
+Your tasks in this project:
+
+1. Design and implement CLEAN, professional Discord outputs (with light emoji use) for:
+   - New trade setups / signals
+   - Trade activation
+   - Trade updates (TP1, TP2, TP3, SL hit, BE, final close)
+2. Wire those outputs into dedicated channels (e.g. “trade-setups” and “trade-updates”).
+3. Implement a risk & position sizing layer optimized for a **$100,000 The 5%ers High Stakes account**, and enforce those constraints for:
+   - LIVE trade suggestions
+   - BACKTEST simulations
+4. Make sure the **backtest uses the exact same risk settings** and returns/prints **total profit** (in $ and %), and can show **per-trade lot size** and summary performance.
+
+==================================================
+A. RISK MODEL – 100K 5%ers HIGH STAKES
+==================================================
+
+Implement a configuration layer (e.g. `risk_config.py` or constants in `config.py`) that models a **100K High Stakes account** with realistic rules:
+
+- `ACCOUNT_CURRENCY = "USD"`
+- `ACCOUNT_SIZE = 100_000`
+- `MAX_DAILY_LOSS_PCT = 0.05`       # 5% daily loss limit
+- `MAX_TOTAL_LOSS_PCT = 0.10`       # 10% absolute drawdown from initial balance
+- `RISK_PER_TRADE_PCT = 0.01`       # default 1% risk per trade (make this configurable)
+- `MAX_OPEN_RISK_PCT = 0.03`        # e.g. total simultaneous risk across open trades <= 3%
+- `MIN_WITHDRAWAL_USD = 150`        # informational – not enforced, but used for display
+
+Notes about The 5%ers rules to keep in mind when designing the logic:
+
+- Daily loss limit is 5% of the higher of starting balance/equity for that day.
+- Max total loss is 10% from the initial 100K.
+- EAs/algos are **allowed** but must:
+  - Always set a **visible stop-loss** on the platform for every trade.
+  - NOT do tick scalping, arbitrage, high-frequency trading, or signal copying.
+- First payout is allowed after 14 days on a funded account, then every 2 weeks, min withdrawal ~150 USD.
+- There is NO explicit “max profit” cap; instead there is a **scaling plan** (100K -> 110K -> … -> 500K with increased profit share and fixed payouts).
+
+You don’t have to code payout logic; just keep these constraints in mind when designing risk sizing functions so that they’re realistic.
+
+Create a central function for position sizing, e.g. in a new module `position_sizing.py`:
+
+```python
+def calculate_position_size_5ers(
+    symbol: str,
+    account_size: float,
+    risk_pct: float,
+    entry_price: float,
+    stop_price: float,
+    contract_specs: dict
+) -> dict:
+    """
+    Returns a dict with:
+      - lot_size (float)
+      - risk_usd (float)
+      - risk_pct (float)
+      - pip_risk (float) or tick risk depending on symbol
+    Enforces:
+      - Always has a finite SL (no no-SL trades).
+      - Uses at most RISK_PER_TRADE_PCT of ACCOUNT_SIZE by default.
+    """
+````
+
+Integrate this function so that BOTH:
+
+* LIVE trade suggestions
+* BACKTEST trades
+
+use the same **position sizing logic** and risk %.
+
+==================================================
+B. DISCORD OUTPUT DESIGN
+========================
+
+Use **Discord embeds** (not just plain text) for all important outputs. Style should be:
+
+* Clean & professional
+* Minimal but consistent emoji use (2–6 per message, max)
+* Easy to scan quickly in a trade room
+
+Define **two main channels** (these will be configured via IDs/env vars):
+
+* `TRADE_SETUPS_CHANNEL_ID` – for new valid trade setups (before entry)
+* `TRADE_UPDATES_CHANNEL_ID` – for all updates on open trades (entry triggered, TP/SL events, close)
+
+If the project already has channel IDs/env vars, reuse them; otherwise:
+
+* Add clear configuration variables for them, and comments instructing me where to put the IDs.
+
+### B1. New trade setup message (in setups channel)
+
+When the strategy finds a new trade setup that passes all confluence filters, send a single, well-structured embed.
+
+Design:
+
+* **Embed title:**
+
+  * For longs: `🟢 EURUSD LONG (H4)`
+  * For shorts: `🔴 EURUSD SHORT (H4)`
+
+* **Description:**
+
+  * One short sentence describing the idea:
+
+    * e.g. `Price reacting from HTF demand with bullish structure and fib confluence.`
+
+* **Fields:**
+
+  1. `Entry & Levels`
+
+     * `Entry: 1.0850`
+     * `Stoploss: 1.0810  (40 pips)`
+     * `TP1: 1.0920  (1.75R)`
+     * `TP2: 1.0980  (3.0R)`
+  2. `Risk & Lot Size (100K 5%ers)`
+
+     * `Account: $100,000 (High Stakes)`
+     * `Risk: 1.00%  |  $1,000`
+     * `Lot size: 2.50 lots`  ← **always show this**
+  3. `Confluence`
+
+     * Bullet list, 3–5 items max, for example:
+
+       * `• HTF: Bullish structure (4H, Daily)`
+       * `• S/R: Retest of prior demand zone`
+       * `• Fib: 61.8% retracement`
+       * `• Liquidity: Sweep of prior lows`
+
+* **Footer:**
+
+  * Something like:
+    `Blueprint-Tradr-AI • Backtested with 5%ers 100K risk settings`
+
+Make sure the embed color reflects direction:
+
+* Green-ish for long, red-ish for short.
+
+Also include an internal ID or short hash of the trade so that updates can reference the same trade (e.g. `trade_id` field in the embed or in the first line of the description).
+
+### B2. Trade activation + updates (in trade-updates channel)
+
+Every time a tracked trade changes state, send a clear embed to the **trade updates channel**.
+
+Key events:
+
+1. **Order filled / trade activated**
+
+   * Title: `✅ Trade Activated – EURUSD LONG`
+   * Fields:
+
+     * `Entry: 1.0850`
+     * `SL: 1.0810  |  Risk: $1,000 (1.00%)`
+     * `Lot size: 2.50`
+     * `Status: OPEN`
+     * `Linked setup: [jump to original message]` (if possible, include a jump link)
+
+2. **TP1 hit**
+
+   * Title: `🎯 TP1 Hit – EURUSD LONG`
+   * Fields:
+
+     * `TP1: 1.0920`
+     * `Realized: +$500  (+0.50%, +0.50R)`  ← use same risk model
+     * `Remaining: 50% position`
+     * `Current SL: moved to BE` (if applicable)
+     * `Lot size remaining: 1.25`
+
+3. **TP2 / TP3 hit**
+
+   * Similar structure:
+
+     * Show which TP level, realized $ / %, total R so far, and remaining position.
+
+4. **Stoploss hit**
+
+   * Title: `🛑 Stoploss Hit – EURUSD LONG`
+   * Fields:
+
+     * `SL: 1.0810`
+     * `Result: -$1,000  (-1.00%, -1.00R)`
+     * `Daily P/L (closed trades): -$500  (-0.50%)`
+     * Indicate if the daily loss or total loss is still within 5%/10% rules.
+
+5. **Trade closed manually or at final TP**
+
+   * Title: `✅ Trade Closed – EURUSD LONG`
+   * Fields:
+
+     * `Average exit: 1.0950`
+     * `Total result: +$2,300  (+2.30%, +2.30R)`
+     * `Day P/L: +$1,800 (+1.80%)`
+     * `Week P/L (closed): +$3,200 (+3.20%)` (optional but nice)
+
+For **all updates**:
+
+* Always show:
+
+  * Lot size (current or initial).
+  * Risk in % and $.
+  * Daily P/L vs the 5% daily loss limit, so the trader sees how close they are to a breach.
+
+Use at most **3–5 emojis** in each update message.
+
+==================================================
+C. BOT LOGIC: STAY WITHIN 5%ERS RULES
+=====================================
+
+* Ensure every trade has a **hard SL** and **visible** exit (no no-SL trades).
+* Add simple checks BEFORE suggesting a new trade:
+
+  * Estimated additional risk for this trade (in %) + current open risk <= `MAX_OPEN_RISK_PCT`.
+  * If realized + open risk for the **day** would exceed 5%, flag it and either:
+
+    * Don’t suggest the trade, or
+    * Mark it clearly in the message as “⚠️ This trade would exceed daily 5% loss limit – not recommended.”
+* Avoid ultra-HFT behavior (e.g. hundreds of trades per day). The strategy should remain swing/day-trade style.
+
+==================================================
+D. BACKTEST INTEGRATION – SAME SETTINGS + TOTAL PROFIT
+======================================================
+
+Make sure the **backtesting** uses the same risk model and position sizing:
+
+1. In `backtest.py` (or equivalent), when simulating each trade:
+
+   * Use the same `calculate_position_size_5ers` function.
+   * Risk per trade = `RISK_PER_TRADE_PCT` of `ACCOUNT_SIZE`.
+   * Track:
+
+     * `total_profit_usd`
+     * `total_profit_pct` (relative to 100K)
+     * `max_drawdown_pct` (from equity curves)
+     * `win_rate`, `average_R`, number of trades, etc.
+
+2. At the end of each backtest run, print/log something like:
+
+   ```text
+   Backtest Summary – EURUSD (2019, 100K 5%ers model)
+   Trades: 73
+   Win rate: 72.6%
+   Total profit: +$54,300 (+54.3%)
+   Max drawdown: -7.8%
+   Expectancy: +0.85R / trade
+   ```
+
+3. Ensure there is a way for the live bot to query the latest backtest stats and:
+
+   * Optionally show them in a Discord command like `/backtest EURUSD 2018-2024`.
+
+==================================================
+E. IMPLEMENTATION DETAILS
+=========================
+
+* Centralize Discord output formatting into a helper module, e.g. `discord_output.py`, with functions:
+
+  * `send_setup_embed(...)`
+  * `send_trade_activated_embed(...)`
+  * `send_trade_update_embed(...)`
+
+* Make sure the trade update system links trades between:
+
+  * Original setup message
+  * Subsequent updates (using a trade ID and/or Discord message ID).
+
+* Add docstrings & comments:
+
+  * How to change risk per trade (e.g. 0.5% vs 1%).
+  * Where to plug in other account sizes.
+  * How the 5%ers daily and total loss limits are represented in code.
+
+* After you finish, please:
+
+  1. Summarize the new/modified files and their roles.
+  2. Show example JSON or Python dicts for a sample trade object and the corresponding Discord embed payload.
+  3. Provide example commands to test:
+
+     * Live formatting with a mock trade.
+     * Backtest run that prints total profit with the 100K 5%ers settings.
+
+The key points:
+
+* Discord outputs must be clean, consistent, emoji-light but visually clear.
+* Every trade message must include **lot size + risk**.
+* Risk model must reflect a **100K 5%ers High Stakes account** and be used identically in both live and backtest modes.
+* Backtests must report **total profit** in both dollars and percent for that 100K model.
+
+```
+
+If you want, I can also help you design **one concrete example embed** (with exact field names) that you can visually compare in Discord once the Agent has implemented this.
+::contentReference[oaicite:1]{index=1}
+```

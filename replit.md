@@ -4,7 +4,47 @@
 
 Blueprint Trader AI is an automated trading signal bot that scans multiple markets (forex, metals, indices, energies, crypto) using a multi-timeframe confluence strategy. The bot identifies high-probability trading opportunities by analyzing 7 technical pillars across monthly, weekly, daily, and 4-hour timeframes. It integrates with Discord for signal delivery and uses OANDA's practice API for market data.
 
+## 5%ers 100K High Stakes Risk Model
+
+The bot is configured for The 5%ers 100K High Stakes account with the following risk settings:
+
+### Account Configuration
+- **Account Size:** $100,000 USD
+- **Risk Per Trade:** 1% ($1,000)
+- **Max Daily Loss:** 5% ($5,000)
+- **Max Total Drawdown:** 10% ($10,000)
+- **Max Open Risk:** 3% ($3,000)
+
+### Position Sizing
+The bot calculates lot sizes based on:
+1. Account size and risk percentage
+2. Stop loss distance in pips
+3. Pip value per lot for each instrument
+
+Example: For a 40-pip stop on EUR/USD with 1% risk:
+- Risk USD = $100,000 × 1% = $1,000
+- Pip value per lot = $10
+- Lot size = $1,000 ÷ (40 × $10) = 2.50 lots
+
+### Discord Outputs
+Trade signals include:
+- **Entry & Levels** - Entry, SL, TP1/TP2/TP3 with R:R values
+- **Risk & Lot Size** - Account size, risk %, USD risk, lot size
+- **Confluence** - Technical factors aligned for the trade
+
+### Key Files
+- `config.py` - Risk configuration (ACCOUNT_SIZE, RISK_PER_TRADE_PCT, etc.)
+- `position_sizing.py` - Lot size calculation functions
+- `discord_output.py` - Professional Discord embed formatting
+
 ## Recent Changes
+
+**November 26, 2025 - 5%ers Risk Model & Discord Embeds**
+- Added 5%ers 100K High Stakes account risk configuration
+- Implemented position sizing with lot size calculations
+- Professional Discord embeds for trade setups and updates
+- Backtest now shows total profit in $ and % with 5%ers model
+- Added max drawdown tracking to backtest results
 
 **November 26, 2025 - Strategy Optimization v2 - Higher Win Rate Focus**
 

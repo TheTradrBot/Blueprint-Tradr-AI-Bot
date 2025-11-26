@@ -452,15 +452,37 @@ def run_backtest(asset: str, period: str) -> Dict:
             "confluence": confluence_score,
         }
 
+    from config import ACCOUNT_SIZE, RISK_PER_TRADE_PCT
+    
     total_trades = len(trades)
     if total_trades > 0:
         wins = sum(1 for t in trades if t["rr"] > 0)
         win_rate = wins / total_trades * 100.0
         total_rr = sum(t["rr"] for t in trades)
-        net_return_pct = total_rr * 1.0
+        net_return_pct = total_rr * RISK_PER_TRADE_PCT * 100
+        avg_rr = total_rr / total_trades
     else:
         win_rate = 0.0
         net_return_pct = 0.0
+        total_rr = 0.0
+        avg_rr = 0.0
+
+    risk_per_trade_usd = ACCOUNT_SIZE * RISK_PER_TRADE_PCT
+    total_profit_usd = total_rr * risk_per_trade_usd
+    
+    running_pnl = 0.0
+    max_drawdown = 0.0
+    peak = 0.0
+    
+    for t in trades:
+        running_pnl += t["rr"] * risk_per_trade_usd
+        if running_pnl > peak:
+            peak = running_pnl
+        drawdown = peak - running_pnl
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+    
+    max_drawdown_pct = (max_drawdown / ACCOUNT_SIZE) * 100 if ACCOUNT_SIZE > 0 else 0.0
 
     tp1_trail_hits = sum(1 for t in trades if t.get("exit_reason") == "TP1+Trail")
     tp2_hits = sum(1 for t in trades if t.get("exit_reason") == "TP2")
@@ -470,9 +492,13 @@ def run_backtest(asset: str, period: str) -> Dict:
     wins = tp1_trail_hits + tp2_hits + tp3_hits
 
     notes_text = (
-        f"Optimized backtest with {min_trade_conf}+ confluence, trailing stops. "
-        f"TP1+Trail ({tp1_trail_hits}), TP2 ({tp2_hits}), TP3 ({tp3_hits}), SL ({sl_hits}). "
-        f"Wins: {wins}, Win Rate: {win_rate:.1f}%"
+        f"Backtest Summary - {asset} ({period_label}, 100K 5%ers model)\n"
+        f"Trades: {total_trades}\n"
+        f"Win rate: {win_rate:.1f}%\n"
+        f"Total profit: +${total_profit_usd:,.0f} (+{net_return_pct:.1f}%)\n"
+        f"Max drawdown: -{max_drawdown_pct:.1f}%\n"
+        f"Expectancy: {avg_rr:+.2f}R / trade\n"
+        f"TP1+Trail ({tp1_trail_hits}), TP2 ({tp2_hits}), TP3 ({tp3_hits}), SL ({sl_hits})"
     )
 
     return {
@@ -481,6 +507,15 @@ def run_backtest(asset: str, period: str) -> Dict:
         "total_trades": total_trades,
         "win_rate": win_rate,
         "net_return_pct": net_return_pct,
+        "total_profit_usd": total_profit_usd,
+        "max_drawdown_pct": max_drawdown_pct,
+        "avg_rr": avg_rr,
+        "tp1_trail_hits": tp1_trail_hits,
+        "tp2_hits": tp2_hits,
+        "tp3_hits": tp3_hits,
+        "sl_hits": sl_hits,
         "trades": trades,
         "notes": notes_text,
+        "account_size": ACCOUNT_SIZE,
+        "risk_per_trade_pct": RISK_PER_TRADE_PCT,
     }
