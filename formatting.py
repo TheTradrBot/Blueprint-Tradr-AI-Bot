@@ -29,11 +29,8 @@ def format_scan_summary(results: List[ScanResult]) -> str:
     for res in results:
         direction_emoji = "🟢" if res.direction == "bullish" else "🔴" if res.direction == "bearish" else "⚪"
         
-        status_tag = ""
-        if res.status == "active":
-            status_tag = "✅ ACTIVE"
-        elif res.status == "in_progress":
-            status_tag = "🕐 WATCHING"
+        if res.status in ("active", "in_progress"):
+            status_tag = "👀 POTENTIAL"
         else:
             status_tag = "📊 SCAN"
         
@@ -69,20 +66,17 @@ def format_scan_group(group_name: str, results: List[ScanResult]) -> str:
     lines.append(f"📊 **{group_name} Scan**")
     lines.append("")
     
-    active_count = sum(1 for r in results if r.status == "active")
-    watching_count = sum(1 for r in results if r.status == "in_progress")
+    potential_count = sum(1 for r in results if r.status in ("active", "in_progress"))
     
-    if active_count > 0 or watching_count > 0:
-        lines.append(f"🎯 {active_count} active | 🕐 {watching_count} watching")
+    if potential_count > 0:
+        lines.append(f"👀 {potential_count} potential setup(s)")
         lines.append("")
     
     for res in results:
         direction_emoji = "🟢" if res.direction == "bullish" else "🔴"
         
-        if res.status == "active":
-            status = "✅"
-        elif res.status == "in_progress":
-            status = "🕐"
+        if res.status in ("active", "in_progress"):
+            status = "👀"
         else:
             status = "📊"
         
@@ -110,10 +104,8 @@ def format_detailed_scan(res: ScanResult) -> str:
     """
     direction_emoji = "🟢" if res.direction == "bullish" else "🔴"
     
-    if res.status == "active":
-        status_line = "✅ **ACTIVE TRADE** - Entry signal confirmed"
-    elif res.status == "in_progress":
-        status_line = "🕐 **WATCHING** - Setup forming, waiting for confirmation"
+    if res.status in ("active", "in_progress"):
+        status_line = "👀 **POTENTIAL SETUP** - Watch for trigger"
     else:
         status_line = "📊 **SCAN ONLY** - No actionable setup yet"
     
@@ -145,19 +137,11 @@ def format_detailed_scan(res: ScanResult) -> str:
     
     lines.append("")
     
-    if res.status == "active" and res.entry is not None:
-        lines.append("**Trade Levels:**")
-        lines.append(f"• Entry: `{res.entry:.5f}`")
-        lines.append(f"• Stop Loss: `{res.stop_loss:.5f}`")
-        if res.tp1:
-            lines.append(f"• TP1: `{res.tp1:.5f}` | TP2: `{res.tp2:.5f}` | TP3: `{res.tp3:.5f}`")
-        lines.append("")
-    
     if res.setup_type:
         lines.append(f"**Setup:** {res.setup_type}")
     
     if res.what_to_look_for:
-        lines.append(f"**Watch For:** {res.what_to_look_for}")
+        lines.append(f"**🎯 Trigger:** {res.what_to_look_for}")
     
     return "\n".join(lines)
 
@@ -166,51 +150,43 @@ def format_autoscan_output(markets: dict) -> List[str]:
     """
     Format autoscan results for Discord channels.
     Returns list of message strings.
+    Shows only potential setups and what to watch for triggers.
     """
     messages: List[str] = []
     
     summary_lines = ["📊 **4H AUTOSCAN COMPLETE**", ""]
     
-    total_active = 0
-    total_watching = 0
+    total_potential = 0
     
     for group_name, (scan_results, trade_ideas) in markets.items():
         if not scan_results:
             continue
         
-        active = sum(1 for r in scan_results if r.status == "active")
-        watching = sum(1 for r in scan_results if r.status == "in_progress")
-        total_active += active
-        total_watching += watching
+        potential = sum(1 for r in scan_results if r.status in ("active", "in_progress"))
+        total_potential += potential
         
-        status = ""
-        if active > 0:
-            status = f"🎯 {active} active"
-        if watching > 0:
-            status += f" 🕐 {watching} watching" if status else f"🕐 {watching} watching"
-        if not status:
-            status = "No setups"
-        
-        summary_lines.append(f"**{group_name}**: {status}")
+        if potential > 0:
+            summary_lines.append(f"**{group_name}**: 👀 {potential} potential setup(s)")
+        else:
+            summary_lines.append(f"**{group_name}**: No setups")
     
     summary_lines.append("")
-    summary_lines.append(f"**Total**: 🎯 {total_active} active | 🕐 {total_watching} watching")
+    summary_lines.append(f"**Total**: 👀 {total_potential} potential setup(s) to watch")
     
     messages.append("\n".join(summary_lines))
     
     for group_name, (scan_results, _) in markets.items():
-        active_setups = [r for r in scan_results if r.status == "active"]
-        if active_setups:
-            group_lines = [f"", f"**{group_name} - Active Setups:**"]
-            for res in active_setups:
+        potential_setups = [r for r in scan_results if r.status in ("active", "in_progress")]
+        if potential_setups:
+            group_lines = [f"", f"**{group_name} - Potential Setups:**"]
+            for res in potential_setups:
                 emoji = "🟢" if res.direction == "bullish" else "🔴"
                 group_lines.append(
                     f"{emoji} **{res.symbol}** {res.direction.upper()} | {res.confluence_score}/7"
                 )
-                if res.entry:
-                    group_lines.append(
-                        f"   Entry: {res.entry:.5f} | SL: {res.stop_loss:.5f}"
-                    )
+                if res.what_to_look_for:
+                    group_lines.append(f"   🎯 Trigger: {res.what_to_look_for}")
+                group_lines.append("")
             messages.append("\n".join(group_lines))
     
     return messages
