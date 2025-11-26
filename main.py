@@ -336,7 +336,7 @@ async def scan(interaction: discord.Interaction, asset: str):
 @bot.tree.command(name="forex", description="Scan all forex pairs.")
 async def forex(interaction: discord.Interaction):
     await interaction.response.defer()
-    scan_results, _ = scan_forex()
+    scan_results, _ = await asyncio.to_thread(scan_forex)
 
     if not scan_results:
         await interaction.followup.send("**Forex** - No setups found.")
@@ -352,7 +352,7 @@ async def forex(interaction: discord.Interaction):
 @bot.tree.command(name="crypto", description="Scan crypto assets.")
 async def crypto(interaction: discord.Interaction):
     await interaction.response.defer()
-    scan_results, _ = scan_crypto()
+    scan_results, _ = await asyncio.to_thread(scan_crypto)
 
     if not scan_results:
         await interaction.followup.send("**Crypto** - No setups found.")
@@ -368,8 +368,8 @@ async def crypto(interaction: discord.Interaction):
 @bot.tree.command(name="com", description="Scan commodities (metals + energies).")
 async def com(interaction: discord.Interaction):
     await interaction.response.defer()
-    scan_results_m, _ = scan_metals()
-    scan_results_e, _ = scan_energies()
+    scan_results_m, _ = await asyncio.to_thread(scan_metals)
+    scan_results_e, _ = await asyncio.to_thread(scan_energies)
     combined = scan_results_m + scan_results_e
 
     if not combined:
@@ -386,7 +386,7 @@ async def com(interaction: discord.Interaction):
 @bot.tree.command(name="indices", description="Scan stock indices.")
 async def indices(interaction: discord.Interaction):
     await interaction.response.defer()
-    scan_results, _ = scan_indices()
+    scan_results, _ = await asyncio.to_thread(scan_indices)
 
     if not scan_results:
         await interaction.followup.send("**Indices** - No setups found.")
@@ -402,7 +402,7 @@ async def indices(interaction: discord.Interaction):
 @bot.tree.command(name="market", description="Full market scan across all asset classes.")
 async def market(interaction: discord.Interaction):
     await interaction.response.defer()
-    markets = scan_all_markets()
+    markets = await asyncio.to_thread(scan_all_markets)
 
     messages = format_autoscan_output(markets)
     
