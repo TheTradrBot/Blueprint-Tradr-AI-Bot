@@ -124,9 +124,14 @@ def get_current_prices(instruments: List[str]) -> Dict[str, Dict[str, float]]:
     if not instruments:
         return {}
     
+    account_id = _get_account_id()
+    if not account_id:
+        print("[data.get_current_prices] No OANDA_ACCOUNT_ID configured")
+        return {}
+    
     # OANDA requires comma-separated instrument list
     instruments_str = ",".join(instruments)
-    url = f"{OANDA_API_URL}/v3/accounts/{_get_account_id()}/pricing"
+    url = f"{OANDA_API_URL}/v3/accounts/{account_id}/pricing"
     
     params = {"instruments": instruments_str}
     
@@ -158,4 +163,7 @@ def get_current_prices(instruments: List[str]) -> Dict[str, Dict[str, float]]:
 def _get_account_id() -> str:
     """Get OANDA account ID from environment."""
     import os
-    return os.getenv("OANDA_ACCOUNT_ID", "")
+    account_id = os.getenv("OANDA_ACCOUNT_ID", "").strip()
+    if not account_id:
+        print("[data._get_account_id] OANDA_ACCOUNT_ID not set or empty")
+    return account_id
