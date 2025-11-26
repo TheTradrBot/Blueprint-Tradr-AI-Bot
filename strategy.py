@@ -121,29 +121,32 @@ def _signal_to_scan_result(signal: Signal) -> ScanResult:
 
 def scan_single_asset(symbol: str) -> Optional[ScanResult]:
     """Full Blueprint scan using unified strategy_core engine."""
-    monthly = get_ohlcv(symbol, timeframe="M", count=240) or []
-    weekly = get_ohlcv(symbol, timeframe="W", count=520) or []
-    daily = get_ohlcv(symbol, timeframe="D", count=2000) or []
-    h4 = get_ohlcv(symbol, timeframe="H4", count=2000) or []
-    
-    if not daily or not weekly:
+    try:
+        monthly = get_ohlcv(symbol, timeframe="M", count=240) or []
+        weekly = get_ohlcv(symbol, timeframe="W", count=520) or []
+        daily = get_ohlcv(symbol, timeframe="D", count=2000) or []
+        h4 = get_ohlcv(symbol, timeframe="H4", count=2000) or []
+        
+        if not daily or not weekly:
+            return None
+        
+        params = get_default_params()
+        signals = generate_signals(
+            candles=daily,
+            symbol=symbol,
+            params=params,
+            monthly_candles=monthly,
+            weekly_candles=weekly,
+            h4_candles=h4,
+        )
+        
+        if not signals:
+            return None
+        
+        most_recent = signals[-1]
+        return _signal_to_scan_result(most_recent)
+    except Exception:
         return None
-    
-    params = get_default_params()
-    signals = generate_signals(
-        candles=daily,
-        symbol=symbol,
-        params=params,
-        monthly_candles=monthly,
-        weekly_candles=weekly,
-        h4_candles=h4,
-    )
-    
-    if not signals:
-        return None
-    
-    most_recent = signals[-1]
-    return _signal_to_scan_result(most_recent)
 
 
 def scan_group(symbols: List[str]) -> Tuple[List[ScanResult], List[ScanResult]]:

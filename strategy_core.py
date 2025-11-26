@@ -392,48 +392,51 @@ def _fib_context(
     Returns:
         Tuple of (note, is_in_fib_zone)
     """
-    candles = daily_candles if len(daily_candles) >= 30 else weekly_candles
-    
-    if not candles or len(candles) < 20:
-        return "Fib: Insufficient data", False
-    
-    leg = _find_last_swing_leg_for_fib(candles, direction)
-    
-    if not leg:
-        return "Fib: No clear swing leg found", False
-    
-    lo, hi = leg
-    span = hi - lo
-    
-    if span <= 0:
-        return "Fib: Invalid swing range", False
-    
-    if direction == "bullish":
-        fib_382 = hi - span * 0.382
-        fib_500 = hi - span * 0.5
-        fib_618 = hi - span * 0.618
-        fib_786 = hi - span * 0.786
+    try:
+        candles = daily_candles if daily_candles and len(daily_candles) >= 30 else weekly_candles
         
-        if fib_786 <= price <= fib_382:
-            level = round((hi - price) / span, 3)
-            return f"Fib: Price at {level:.1%} retracement (Golden Pocket zone)", True
-        elif fib_618 <= price <= fib_500:
-            return "Fib: Price at 50-61.8% zone", True
-        else:
-            return "Fib: Price outside retracement zone", False
-    else:
-        fib_382 = lo + span * 0.382
-        fib_500 = lo + span * 0.5
-        fib_618 = lo + span * 0.618
-        fib_786 = lo + span * 0.786
+        if not candles or len(candles) < 20:
+            return "Fib: Insufficient data", False
         
-        if fib_382 <= price <= fib_786:
-            level = round((price - lo) / span, 3)
-            return f"Fib: Price at {level:.1%} retracement (Golden Pocket zone)", True
-        elif fib_500 <= price <= fib_618:
-            return "Fib: Price at 50-61.8% zone", True
+        leg = _find_last_swing_leg_for_fib(candles, direction)
+        
+        if not leg:
+            return "Fib: No clear swing leg found", False
+        
+        lo, hi = leg
+        span = hi - lo
+        
+        if span <= 0:
+            return "Fib: Invalid swing range", False
+    except Exception as e:
+        return f"Fib: Error calculating ({type(e).__name__})", False
+    
+        if direction == "bullish":
+            fib_382 = hi - span * 0.382
+            fib_500 = hi - span * 0.5
+            fib_618 = hi - span * 0.618
+            fib_786 = hi - span * 0.786
+            
+            if fib_786 <= price <= fib_382:
+                level = round((hi - price) / span, 3)
+                return f"Fib: Price at {level:.1%} retracement (Golden Pocket zone)", True
+            elif fib_618 <= price <= fib_500:
+                return "Fib: Price at 50-61.8% zone", True
+            else:
+                return "Fib: Price outside retracement zone", False
         else:
-            return "Fib: Price outside retracement zone", False
+            fib_382 = lo + span * 0.382
+            fib_500 = lo + span * 0.5
+            fib_618 = lo + span * 0.618
+            fib_786 = lo + span * 0.786
+            
+            if fib_382 <= price <= fib_786:
+                level = round((price - lo) / span, 3)
+                return f"Fib: Price at {level:.1%} retracement (Golden Pocket zone)", True
+            elif fib_500 <= price <= fib_618:
+                return "Fib: Price at 50-61.8% zone", True
+            else:
+                return "Fib: Price outside retracement zone", False
 
 
 def _find_last_swing_leg_for_fib(candles: List[Dict], direction: str) -> Optional[Tuple[float, float]]:
@@ -443,23 +446,36 @@ def _find_last_swing_leg_for_fib(candles: List[Dict], direction: str) -> Optiona
     Returns:
         Tuple of (swing_low, swing_high) or None
     """
-    if len(candles) < 20:
+    if not candles or len(candles) < 20:
         return None
     
-    swing_highs, swing_lows = _find_pivots(candles, lookback=3)
+    try:
+        swing_highs, swing_lows = _find_pivots(candles, lookback=3)
+    except Exception:
+        swing_highs, swing_lows = [], []
     
     if not swing_highs or not swing_lows:
-        highs = [c["high"] for c in candles[-30:]]
-        lows = [c["low"] for c in candles[-30:]]
-        return (min(lows), max(highs))
+        try:
+            highs = [c["high"] for c in candles[-30:] if "high" in c]
+            lows = [c["low"] for c in candles[-30:] if "low" in c]
+            if highs and lows:
+                return (min(lows), max(highs))
+        except Exception:
+            pass
+        return None
     
-    recent_highs = swing_highs[-3:] if len(swing_highs) >= 3 else swing_highs
-    recent_lows = swing_lows[-3:] if len(swing_lows) >= 3 else swing_lows
+    try:
+        recent_highs = swing_highs[-3:] if len(swing_highs) >= 3 else swing_highs
+        recent_lows = swing_lows[-3:] if len(swing_lows) >= 3 else swing_lows
+        
+        if recent_highs and recent_lows:
+            hi = max(recent_highs)
+            lo = min(recent_lows)
+            return (lo, hi)
+    except Exception:
+        pass
     
-    hi = max(recent_highs)
-    lo = min(recent_lows)
-    
-    return (lo, hi)
+    return None
 
 
 def _daily_liquidity_context(candles: List[Dict], price: float) -> Tuple[str, bool]:
@@ -469,57 +485,63 @@ def _daily_liquidity_context(candles: List[Dict], price: float) -> Tuple[str, bo
     Returns:
         Tuple of (note, is_near_liquidity)
     """
-    if not candles or len(candles) < 10:
-        return "Liquidity: Insufficient data", False
-    
-    lookback = min(20, len(candles))
-    recent = candles[-lookback:]
-    
-    recent_highs = [c["high"] for c in recent]
-    recent_lows = [c["low"] for c in recent]
-    
-    equal_highs = []
-    equal_lows = []
-    
-    atr = _atr(candles, 14)
-    tolerance = atr * 0.2 if atr > 0 else (max(recent_highs) - min(recent_lows)) * 0.02
-    
-    for i, h in enumerate(recent_highs):
-        for j, h2 in enumerate(recent_highs):
-            if i != j and abs(h - h2) < tolerance:
-                equal_highs.append(h)
-                break
-    
-    for i, l in enumerate(recent_lows):
-        for j, l2 in enumerate(recent_lows):
-            if i != j and abs(l - l2) < tolerance:
-                equal_lows.append(l)
-                break
-    
-    near_equal_high = any(abs(price - h) < tolerance * 2 for h in equal_highs)
-    near_equal_low = any(abs(price - l) < tolerance * 2 for l in equal_lows)
-    
-    current = candles[-1]
-    prev = candles[-2] if len(candles) >= 2 else None
-    
-    swept_high = False
-    swept_low = False
-    
-    if prev:
-        prev_high = max(c["high"] for c in candles[-10:-1])
-        prev_low = min(c["low"] for c in candles[-10:-1])
+    try:
+        if not candles or len(candles) < 10:
+            return "Liquidity: Insufficient data", False
         
-        if current["high"] > prev_high and current["close"] < prev_high:
-            swept_high = True
-        if current["low"] < prev_low and current["close"] > prev_low:
-            swept_low = True
+        lookback = min(20, len(candles))
+        recent = candles[-lookback:]
+        
+        recent_highs = [c["high"] for c in recent if "high" in c]
+        recent_lows = [c["low"] for c in recent if "low" in c]
+        
+        if not recent_highs or not recent_lows:
+            return "Liquidity: Invalid data", False
+        
+        equal_highs = []
+        equal_lows = []
+        
+        atr = _atr(candles, 14)
+        tolerance = atr * 0.2 if atr > 0 else (max(recent_highs) - min(recent_lows)) * 0.02
     
-    if swept_high or swept_low:
-        return "Liquidity: Sweep detected", True
-    elif near_equal_high or near_equal_low:
-        return "Liquidity: Near equal highs/lows", True
-    else:
-        return "Liquidity: No clear liquidity zone", False
+        for i, h in enumerate(recent_highs):
+            for j, h2 in enumerate(recent_highs):
+                if i != j and abs(h - h2) < tolerance:
+                    equal_highs.append(h)
+                    break
+        
+        for i, l in enumerate(recent_lows):
+            for j, l2 in enumerate(recent_lows):
+                if i != j and abs(l - l2) < tolerance:
+                    equal_lows.append(l)
+                    break
+        
+        near_equal_high = any(abs(price - h) < tolerance * 2 for h in equal_highs)
+        near_equal_low = any(abs(price - l) < tolerance * 2 for l in equal_lows)
+        
+        current = candles[-1]
+        prev = candles[-2] if len(candles) >= 2 else None
+        
+        swept_high = False
+        swept_low = False
+        
+        if prev:
+            prev_high = max(c["high"] for c in candles[-10:-1] if "high" in c)
+            prev_low = min(c["low"] for c in candles[-10:-1] if "low" in c)
+            
+            if current.get("high", 0) > prev_high and current.get("close", 0) < prev_high:
+                swept_high = True
+            if current.get("low", float("inf")) < prev_low and current.get("close", float("inf")) > prev_low:
+                swept_low = True
+        
+        if swept_high or swept_low:
+            return "Liquidity: Sweep detected", True
+        elif near_equal_high or near_equal_low:
+            return "Liquidity: Near equal highs/lows", True
+        else:
+            return "Liquidity: No clear liquidity zone", False
+    except Exception as e:
+        return f"Liquidity: Error ({type(e).__name__})", False
 
 
 def _structure_context(
@@ -927,26 +949,29 @@ def generate_signals(
     signals = []
     
     for i in range(50, len(candles)):
-        daily_slice = candles[:i+1]
-        
-        weekly_slice = weekly_candles[:i//5+1] if weekly_candles else None
-        monthly_slice = monthly_candles[:i//20+1] if monthly_candles else None
-        h4_slice = h4_candles[:i*6+1] if h4_candles else None
-        
-        mn_trend = _infer_trend(monthly_slice) if monthly_slice else _infer_trend(daily_slice[-60:])
-        wk_trend = _infer_trend(weekly_slice) if weekly_slice else _infer_trend(daily_slice[-20:])
-        d_trend = _infer_trend(daily_slice[-10:])
-        
-        direction, _, _ = _pick_direction_from_bias(mn_trend, wk_trend, d_trend)
-        
-        flags, notes, trade_levels = compute_confluence(
-            monthly_slice or [],
-            weekly_slice or [],
-            daily_slice,
-            h4_slice or daily_slice[-20:],
-            direction,
-            params,
-        )
+        try:
+            daily_slice = candles[:i+1]
+            
+            weekly_slice = weekly_candles[:i//5+1] if weekly_candles else None
+            monthly_slice = monthly_candles[:i//20+1] if monthly_candles else None
+            h4_slice = h4_candles[:i*6+1] if h4_candles else None
+            
+            mn_trend = _infer_trend(monthly_slice) if monthly_slice else _infer_trend(daily_slice[-60:])
+            wk_trend = _infer_trend(weekly_slice) if weekly_slice else _infer_trend(daily_slice[-20:])
+            d_trend = _infer_trend(daily_slice[-10:])
+            
+            direction, _, _ = _pick_direction_from_bias(mn_trend, wk_trend, d_trend)
+            
+            flags, notes, trade_levels = compute_confluence(
+                monthly_slice or [],
+                weekly_slice or [],
+                daily_slice,
+                h4_slice or daily_slice[-20:],
+                direction,
+                params,
+            )
+        except Exception:
+            continue
         
         entry, sl, tp1, tp2, tp3, tp4, tp5 = trade_levels
         
