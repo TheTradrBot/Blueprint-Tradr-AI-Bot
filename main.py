@@ -15,7 +15,6 @@ from config import (
     INDICES,
     ENERGIES,
     CRYPTO_ASSETS,
-    BONDS,
     SIGNAL_MODE,
 )
 
@@ -452,7 +451,6 @@ async def live(interaction: discord.Interaction):
             "Indices": INDICES,
             "Energies": ENERGIES,
             "Crypto": CRYPTO_ASSETS,
-            "Bonds": BONDS,
         }
 
         lines: list[str] = []

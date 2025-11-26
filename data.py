@@ -156,6 +156,6 @@ def get_current_prices(instruments: List[str]) -> Dict[str, Dict[str, float]]:
 
 
 def _get_account_id() -> str:
-    """Get OANDA account ID from config."""
-    from config import OANDA_ACCOUNT_ID
-    return OANDA_ACCOUNT_ID or ""
+    """Get OANDA account ID from environment."""
+    import os
+    return os.getenv("OANDA_ACCOUNT_ID", "")

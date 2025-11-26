@@ -133,13 +133,10 @@ CRYPTO_ASSETS = [
     "LINK_USD",  # Chainlink
 ]
 
-# Bonds (disabled)
-BONDS = []
-
 # Convenience groups
 
 def all_market_instruments() -> list[str]:
     """All instruments Blueprint can scan."""
     return sorted(set(
-        FOREX_PAIRS + METALS + INDICES + ENERGIES + CRYPTO_ASSETS + BONDS
+        FOREX_PAIRS + METALS + INDICES + ENERGIES + CRYPTO_ASSETS
     ))
