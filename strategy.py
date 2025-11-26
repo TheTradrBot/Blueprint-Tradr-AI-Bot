@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
 
@@ -19,6 +20,8 @@ from strategy_core import (
     get_default_params,
     Signal,
 )
+
+MAX_SIGNAL_AGE_DAYS = 5
 
 
 @dataclass
@@ -144,7 +147,29 @@ def scan_single_asset(symbol: str) -> Optional[ScanResult]:
         if not signals:
             return None
         
-        most_recent = signals[-1]
+        now = dt.datetime.now(dt.timezone.utc)
+        cutoff = now - dt.timedelta(days=MAX_SIGNAL_AGE_DAYS)
+        
+        recent_signals = []
+        for sig in signals:
+            sig_time = sig.timestamp
+            if sig_time is None:
+                continue
+            if isinstance(sig_time, str):
+                try:
+                    sig_time = dt.datetime.fromisoformat(sig_time.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+            if not hasattr(sig_time, 'tzinfo') or sig_time.tzinfo is None:
+                sig_time = sig_time.replace(tzinfo=dt.timezone.utc)
+            
+            if sig_time >= cutoff:
+                recent_signals.append(sig)
+        
+        if not recent_signals:
+            return None
+        
+        most_recent = recent_signals[-1]
         return _signal_to_scan_result(most_recent)
     except Exception:
         return None
