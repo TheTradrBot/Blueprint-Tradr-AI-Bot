@@ -624,11 +624,11 @@ def run_backtest(asset: str, period: str) -> Dict:
         if entry is None or sl is None or tp1 is None:
             continue
 
-        # Use ACTUAL market execution price: the daily candle close at entry
-        # Theoretical entry is just for level calculation; real execution is at market price
-        execution_entry = close
+        # Use 4-hour candle close for actual entry execution
+        # Signals are based on daily analysis but entered on 4-hour confirmation
+        execution_entry = h4_slice[-1]["close"] if h4_slice else close
         
-        # Recalculate SL and TP based on actual entry price, keep the same risk
+        # Recalculate SL and TP based on actual entry price
         risk_theoretical = abs(entry - sl)
         if risk_theoretical <= 0:
             continue
