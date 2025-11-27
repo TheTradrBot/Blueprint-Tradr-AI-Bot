@@ -55,6 +55,8 @@ from backtest import run_backtest
 from data import get_ohlcv, get_cache_stats, clear_cache, get_current_prices
 from risk_manager import get_risk_manager, RiskCheckResult, TradeRecord
 from discord_output import create_phase_progress_embed
+from trade_state import get_trade_state
+from challenge_simulator import simulate_challenge_for_month, format_challenge_result
 
 
 ACTIVE_TRADES: dict[str, ScanResult] = {}
@@ -244,6 +246,7 @@ async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
     if not ACTIVE_TRADES:
         return
 
+    trade_state = get_trade_state()
     trade_keys = list(ACTIVE_TRADES.keys())
     
     all_symbols = list(set(ACTIVE_TRADES[k].symbol for k in trade_keys if k in ACTIVE_TRADES))
@@ -277,22 +280,26 @@ async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
         closed = False
         embeds_to_send = []
 
+        trade_id = trade_state.generate_trade_id(trade.symbol, direction, entry)
+        
         if sl is not None and not progress["sl"]:
             if (direction == "bullish" and price <= sl) or (direction == "bearish" and price >= sl):
                 progress["sl"] = True
                 closed = True
                 
-                entry_dt = TRADE_ENTRY_DATES.get(key)
-                embed = create_sl_hit_embed(
-                    symbol=trade.symbol,
-                    direction=direction,
-                    sl_price=sl,
-                    result_usd=-risk_usd,
-                    result_pct=-RISK_PER_TRADE_PCT * 100,
-                    result_r=-1.0,
-                    entry_datetime=entry_dt,
-                )
-                embeds_to_send.append(embed)
+                if not trade_state.is_update_posted(trade_id, "sl"):
+                    entry_dt = TRADE_ENTRY_DATES.get(key)
+                    embed = create_sl_hit_embed(
+                        symbol=trade.symbol,
+                        direction=direction,
+                        sl_price=sl,
+                        result_usd=-risk_usd,
+                        result_pct=-RISK_PER_TRADE_PCT * 100,
+                        result_r=-1.0,
+                        entry_datetime=entry_dt,
+                    )
+                    embeds_to_send.append(embed)
+                    trade_state.mark_update_posted(trade_id, "sl")
 
         tp_levels = [
             ("TP1", "tp1", trade.tp1, 1),
@@ -316,33 +323,35 @@ async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
                 if hit:
                     progress[flag] = True
                     
-                    if direction == "bullish":
-                        rr = (level - entry) / risk if risk > 0 else 0
-                    else:
-                        rr = (entry - level) / risk if risk > 0 else 0
-                    
-                    realized_usd = risk_usd * rr
-                    realized_pct = RISK_PER_TRADE_PCT * rr * 100
-                    
-                    remaining_pct = 100 - (tp_num * 33.3)
-                    remaining_lots = lot_size * (remaining_pct / 100)
-                    
-                    entry_dt = TRADE_ENTRY_DATES.get(key)
-                    embed = create_tp_hit_embed(
-                        symbol=trade.symbol,
-                        direction=direction,
-                        tp_level=tp_num,
-                        tp_price=level,
-                        realized_usd=realized_usd,
-                        realized_pct=realized_pct,
-                        realized_r=rr,
-                        remaining_pct=max(0, remaining_pct),
-                        remaining_lots=max(0, remaining_lots),
-                        current_sl=entry if tp_num == 1 else None,
-                        moved_to_be=(tp_num == 1),
-                        entry_datetime=entry_dt,
-                    )
-                    embeds_to_send.append(embed)
+                    if not trade_state.is_update_posted(trade_id, flag):
+                        if direction == "bullish":
+                            rr = (level - entry) / risk if risk > 0 else 0
+                        else:
+                            rr = (entry - level) / risk if risk > 0 else 0
+                        
+                        realized_usd = risk_usd * rr
+                        realized_pct = RISK_PER_TRADE_PCT * rr * 100
+                        
+                        remaining_pct = 100 - (tp_num * 33.3)
+                        remaining_lots = lot_size * (remaining_pct / 100)
+                        
+                        entry_dt = TRADE_ENTRY_DATES.get(key)
+                        embed = create_tp_hit_embed(
+                            symbol=trade.symbol,
+                            direction=direction,
+                            tp_level=tp_num,
+                            tp_price=level,
+                            realized_usd=realized_usd,
+                            realized_pct=realized_pct,
+                            realized_r=rr,
+                            remaining_pct=max(0, remaining_pct),
+                            remaining_lots=max(0, remaining_lots),
+                            current_sl=entry if tp_num == 1 else None,
+                            moved_to_be=(tp_num == 1),
+                            entry_datetime=entry_dt,
+                        )
+                        embeds_to_send.append(embed)
+                        trade_state.mark_update_posted(trade_id, flag)
 
         all_tps_hit = all(
             progress[flag] for label, flag, level, _ in tp_levels if level is not None
@@ -364,18 +373,20 @@ async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
                 pnl_usd = risk_usd * total_rr
                 reason = "All TPs Hit"
                 
-                entry_dt = TRADE_ENTRY_DATES.get(key)
-                embed = create_trade_closed_embed(
-                    symbol=trade.symbol,
-                    direction=direction,
-                    avg_exit=price,
-                    total_result_usd=pnl_usd,
-                    total_result_pct=RISK_PER_TRADE_PCT * total_rr * 100,
-                    total_result_r=total_rr,
-                    exit_reason=reason,
-                    entry_datetime=entry_dt,
-                )
-                embeds_to_send.append(embed)
+                if not trade_state.is_update_posted(trade_id, "closed"):
+                    entry_dt = TRADE_ENTRY_DATES.get(key)
+                    embed = create_trade_closed_embed(
+                        symbol=trade.symbol,
+                        direction=direction,
+                        avg_exit=price,
+                        total_result_usd=pnl_usd,
+                        total_result_pct=RISK_PER_TRADE_PCT * total_rr * 100,
+                        total_result_r=total_rr,
+                        exit_reason=reason,
+                        entry_datetime=entry_dt,
+                    )
+                    embeds_to_send.append(embed)
+                    trade_state.mark_update_posted(trade_id, "closed")
             else:
                 pnl_usd = 0
                 reason = "Unknown"
@@ -435,6 +446,8 @@ async def help_command(interaction: discord.Interaction):
 **Analysis:**
 `/backtest [asset] [period]` - Test strategy performance
   Example: `/backtest EUR_USD "Jan 2024 - Dec 2024"`
+`/pass [month] [year]` - Simulate 10K challenge for a month
+  Example: `/pass 9 2024`
 
 **System:**
 `/cache` - View cache statistics
@@ -809,6 +822,53 @@ async def profile_cmd(interaction: discord.Interaction):
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
+@bot.tree.command(name="pass", description="Simulate challenge for a specific month/year.")
+@app_commands.describe(
+    month="Month (1-12)",
+    year="Year (e.g., 2024)"
+)
+async def pass_command(interaction: discord.Interaction, month: int, year: int):
+    """Simulate a The5ers challenge for a given month/year."""
+    if not 1 <= month <= 12:
+        await interaction.response.send_message(
+            "Invalid month. Please enter a value between 1 and 12.",
+            ephemeral=True
+        )
+        return
+    
+    if not 2020 <= year <= 2030:
+        await interaction.response.send_message(
+            "Invalid year. Please enter a value between 2020 and 2030.",
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.defer()
+    
+    try:
+        result = await asyncio.to_thread(simulate_challenge_for_month, year, month)
+        
+        output = format_challenge_result(result)
+        
+        if result.both_passed:
+            color = discord.Color.green()
+            title = f"Challenge PASSED - {result.days_to_pass} Days"
+        else:
+            color = discord.Color.red()
+            title = "Challenge FAILED"
+        
+        embed = discord.Embed(
+            title=title,
+            description=output,
+            color=color,
+        )
+        
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        print(f"[/pass] Error simulating challenge: {e}")
+        await interaction.followup.send(f"Error running challenge simulation: {str(e)}")
+
+
 @tasks.loop(hours=SCAN_INTERVAL_HOURS)
 async def autoscan_loop():
     await bot.wait_until_ready()
@@ -851,7 +911,16 @@ async def autoscan_loop():
             live_prices = await asyncio.to_thread(get_current_prices, list(set(active_trade_symbols)))
             print(f"[autoscan] Got live prices for {len(live_prices)} symbols")
         
+        trade_state = get_trade_state()
+        
         for trade in pending_trades:
+            trade_key = f"{trade.symbol}_{trade.direction}"
+            trade_id = trade_state.generate_trade_id(trade.symbol, trade.direction, trade.entry)
+            
+            if trade_state.is_trade_posted(trade_id):
+                print(f"[autoscan] {trade.symbol}: SKIPPED - Already posted in previous session")
+                continue
+            
             live_price_data = live_prices.get(trade.symbol)
             if not live_price_data:
                 print(f"[autoscan] {trade.symbol}: SKIPPED - Could not fetch live price (check OANDA API credentials)")
@@ -885,7 +954,6 @@ async def autoscan_loop():
             print(f"[autoscan] {trade.symbol}: Using live price {live_mid:.5f} as entry - {message}")
 
             confluence_items = build_confluence_list(trade)
-            trade_key = f"{trade.symbol}_{trade.direction}"
             entry_time = TRADE_ENTRY_DATES.get(trade_key)
             
             embed = create_setup_embed(
@@ -907,6 +975,10 @@ async def autoscan_loop():
                 embed.add_field(name="Risk Warning", value=message.split("Warning: ")[-1].rstrip(")"), inline=False)
             
             await trades_channel.send(embed=embed)
+            
+            trade_state.mark_trade_posted(trade_id)
+        
+        trade_state.update_scan_time()
 
     updates_channel = bot.get_channel(TRADE_UPDATES_CHANNEL_ID)
     if updates_channel is not None and ACTIVE_TRADES:

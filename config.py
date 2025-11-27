@@ -98,13 +98,8 @@ FOREX_PAIRS = [
 METALS = [
     "XAU_USD",
     "XAG_USD",
-    "XPT_USD",
-    "XPD_USD",
     "XAU_EUR",
-    "XAU_GBP",
-    "XAU_AUD",
     "XAG_EUR",
-    "XCU_USD",
 ]
 
 INDICES = [
@@ -116,7 +111,6 @@ INDICES = [
 ENERGIES = [
     "WTICO_USD",
     "BCO_USD",
-    "NATGAS_USD",
 ]
 
 CRYPTO_ASSETS = [

@@ -1,0 +1,334 @@
+You are a senior quantitative developer, prop-firm risk architect, and Python refactor specialist.
+
+Context:
+- We are inside my existing Blueprint-Tradr bot project in Replit.
+- The bot already works:
+  - Strategy logic (Blueprint-Tradr confluence strategy) is implemented and trades live/paper.
+  - Discord output is working and does NOT need a full redesign (only targeted changes).
+  - Backtesting exists and runs.
+  - The current configuration was originally built around a The5ers 100K-style profile.
+- I have now shifted focus to a **The5ers High Stakes 10K challenge** and want the bot fully tuned for this, without breaking the core strategy edge.
+
+Your job is to:
+1) Double-check that the **strategy** and **backtest** are correctly aligned and using the same core logic.
+2) Verify and optimize everything specifically for a **10K The5ers High Stakes challenge**.
+3) Add a clear **“challenge simulation per month/year”** feature, including a `/pass month year` interface.
+4) Implement an automatic parameter optimization loop that tunes the configuration so the 10K challenge is passed on historical months according to defined criteria (without changing the core entry strategy).
+5) Clean the asset universe by removing some pairs.
+6) Ensure the Discord bot only posts **future trades and updates**, not old trades when it restarts.
+7) Validate via backtests that the **strategy performance profile remains strong per asset** (minimum yearly trades, win-rate, and return) under the 10K optimization.
+
+==================================================
+PART 1 – STRATEGY vs BACKTEST CONSISTENCY
+==================================================
+
+1. Inspect the codebase and identify:
+   - Where the **live/paper trading strategy logic** sits (signal generation, confluence rules, entry/exit).
+   - Where the **backtest logic** sits (how trades are simulated on historical data).
+
+2. Ensure that:
+   - The **backtest uses exactly the same core strategy logic** as the live/paper engine.
+   - There is a single shared implementation of the main entry/exit logic (no duplicated, diverging strategy code).
+   - Both live/paper trading and backtests call the same functions/classes for:
+     - signal generation,
+     - risk calculation,
+     - trade approval/rejection.
+
+3. Add comments or brief documentation to make it clear that:
+   - Strategy logic is unified,
+   - Backtests faithfully reflect what the live bot would do.
+
+==================================================
+PART 2 – 10K THE5ERS HIGH STAKES CHALLENGE PROFILE
+==================================================
+
+The bot must be optimized for a **The5ers High Stakes 10K** challenge:
+
+- Starting balance: 10,000
+- Phase 1 target: about +8%
+- Phase 2 target: about +5%
+- Max daily loss: about 5%
+- Max total loss: about 10%
+- Other rules such as minimum trading days (acknowledge them, but focus mainly on risk/drawdown constraints).
+
+Your task:
+
+1. Double-check all risk-related code and configuration:
+   - Confirm that all calculations (risk per trade, max open risk, drawdown limits) are based on a **10K account**, not 100K.
+   - Confirm that per-trade risk is in the **medium to medium-high** range (e.g. configurable around 0.5–1.0% per trade), while never allowing the configuration to violate The5ers drawdown constraints.
+   - Confirm that total open risk and **projected loss** from all open trades cannot exceed:
+     - a safe buffer under the 5% daily limit,
+     - a safe buffer under the 10% total limit.
+
+2. Adjust/tune parameters if needed so that:
+   - The strategy aims to pass a **10K phase in a realistic timeframe** (e.g. roughly 1–3 strong weeks of trading), not hyper-aggressively but also not overly conservative.
+   - Backtest metrics (see Parts 3, 6, and 7) show that this is plausible:
+     - reasonable number of trades,
+     - controlled drawdowns,
+     - low probability of rule violations.
+
+3. Ensure all internal metrics and Discord outputs refer to:
+   - 10K balance,
+   - 10K drawdown numbers and percentages,
+   - 10K phase targets,
+   even if some configuration still allows switching to other account sizes later.
+
+==================================================
+PART 3 – MONTH/YEAR CHALLENGE SIMULATION CORE
+==================================================
+
+I want a **simple interface** to test, for any historical month/year, whether this 10K configuration could realistically pass the The5ers High Stakes challenge (Phase 1 + Phase 2).
+
+Implement the following:
+
+1. A function or entrypoint that lets me specify:
+   - `month` (1–12),
+   - `year` (e.g. 2024, 2025),
+
+   and then runs a **backtest exactly over that calendar month** (or from the start of the month until it either:
+   - completes **both** phases of the challenge (e.g. +8% then +5%),
+   - hits a rule violation (max daily loss or max total loss),
+   - or reaches the end of that calendar month).
+
+2. This “challenge simulation” must:
+   - Use the **same unified strategy logic** as live trading.
+   - Use all the **risk and guard rules** for the 10K profile:
+     - daily loss limits,
+     - total loss limits,
+     - Friday/weekend restrictions,
+     - any cooldown logic that’s part of the 10K profile.
+
+3. The core **output** for a single month/year simulation should include:
+
+   - Whether the challenge is:
+     - `Phase 1 passed: YES/NO`
+     - `Phase 2 passed: YES/NO`
+     - And if **both phases are passed**, then:
+       - `Passed in: X days` (number of calendar days from the first trading day in that month until the day both phases are completed),
+       - `Total profit: +Y% (+$Z)` at the simulation end (or at the moment both phases are completed),
+       - `Total trades: N` (number of trades taken during that period).
+   - If not both phases are passed, clearly show:
+     - whether there were rule violations,
+     - final profit/loss,
+     - maximum daily and total drawdown.
+
+4. Expose this simulation via:
+   - A callable function e.g. `simulate_challenge_for_month(year, month)`, and
+   - A simple CLI entrypoint, for example:
+
+     ```bash
+     python backtest_main.py --mode challenge --year 2024 --month 9
+     ```
+
+==================================================
+PART 4 – /pass MONTH YEAR COMMAND
+==================================================
+
+I want a simple **prompt/command** to trigger this simulation easily.
+
+1. Add a way (e.g. CLI or Discord slash command) to call the challenge simulation, for example:
+
+   - Command format: `/pass <month> <year>`
+
+2. When this is invoked (via CLI or through Discord, depending on how you integrate it), it should:
+
+   - Run the 10K challenge simulation for that given month/year.
+   - Return/output a summary that includes:
+
+     - `Phase 1 passed: YES/NO`
+     - `Phase 2 passed: YES/NO`
+     - If both passed:
+       - `Passed in: X days`
+       - `Total profit: +Y% (+$Z)`
+       - `Total trades: N`
+     - Key drawdown metrics and any rule-violation notes if relevant.
+
+3. If done via Discord, keep the formatting consistent with the bot’s existing style (clean, readable, not over-styled).
+
+==================================================
+PART 5 – AUTOMATED MONTH-BY-MONTH OPTIMIZATION LOOP
+==================================================
+
+I want the system to not just simulate, but also **optimize configuration** (parameters) so that the 10K challenge is robustly passable across historical months.
+
+Important constraints:
+- DO **NOT** change the fundamental **entry/exit strategy logic** (Blueprint-Tradr confluences, structure, etc.).
+- You may change **parameters around the strategy**:
+  - risk per trade,
+  - per-asset risk caps,
+  - maximum concurrent trades,
+  - filters/thresholds that are clearly “tunable parameters” (e.g., minimum confluence score, volatility filters, etc.).
+- The optimization should focus on **risk and secondary parameters**, not rewriting the core edge.
+
+Your task:
+
+1. Implement a backtesting routine that can:
+   - Iterate over multiple consecutive months (e.g. over a full year),
+   - For each month:
+     - run the 10K challenge simulation,
+     - record whether both phases would be passed, days to pass, profit, and number of trades.
+
+2. Implement an **optimization loop** (it can be heuristic, grid-search, or iterative improvement) that:
+   - Adjusts the tunable parameters within sensible ranges,
+   - Runs the month-level backtests,
+   - Evaluates whether the configuration meets the following criteria on each tested month:
+     - Does **not** violate The5ers 10K rules (no daily/total DD beyond limits),
+     - Has a respectable performance profile (see Part 7),
+     - Strives to pass both phases within a reasonable number of days when possible, or at least show strong progress with controlled risk.
+
+3. The goal is:
+
+   - For the chosen historical period (e.g. a year), the optimized configuration should:
+     - Robustly pass or perform strongly in each month,
+     - Stay within The5ers risk constraints,
+     - Preserve the overall edge profile (trades, win-rate, returns).
+
+4. If it is **not possible** to find a configuration that passes both phases for every single month in the tested period without breaking constraints:
+   - Do **not** distort the strategy.
+   - Instead, ensure the code can report:
+     - Which months fail,
+     - Why they fail (insufficient profit, too few trades, rule violation, etc.).
+
+==================================================
+PART 6 – ASSET UNIVERSE CLEANUP
+==================================================
+
+Update the asset universe / symbol list to **remove** the following pairs completely (from both live/paper trading and backtests):
+
+- NATGAS
+- XPTUSD
+- XPDUSD
+- XAUGBP
+- XAUAUD
+- XCUUSD
+
+Make sure:
+- They are removed from any configuration files, asset lists, scanning loops, or backtest setups.
+- They are no longer traded or scanned anywhere in the system.
+
+==================================================
+PART 7 – DISCORD: ONLY FUTURE TRADES & UPDATES
+==================================================
+
+Right now, when the bot stops and then runs again, it can resend old trades and trade updates to the Discord channels, even if those trades belong to a previous session.
+
+I want you to fix this behaviour:
+
+1. The bot should **only post future trades and updates** in the main trading channels:
+   - the **trades** channel (where new setups/entries are announced),
+   - the **trade-updates** channel (where SL/TP hits, trailing stops, modifications, etc. are reported).
+
+2. When the bot restarts:
+   - It must **not** resend historical trades or updates that were already posted earlier.
+   - It should resume from the current state:
+     - optionally recognize existing open positions without re-announcing them as new trades,
+     - only post **new** events that occur after the restart (new signals, SL/TP hits after restart, etc.).
+
+3. Implement a reliable mechanism to do this, for example:
+   - A persistent record of trade IDs/timestamps that have already been posted to Discord,
+   - Or state tracking of open vs closed trades that clearly distinguishes historical from new events.
+
+4. Keep the **style and formatting** of Discord messages as close as possible to the current implementation. Only change what is necessary to:
+   - prevent duplicate announcements on restart,
+   - ensure that only genuinely new trades and updates are posted.
+
+==================================================
+PART 8 – PERFORMANCE VALIDATION AGAINST TARGET PROFILE (PER ASSET)
+==================================================
+
+The strategy already has a strong performance profile from earlier tests. I want to ensure that, after all these changes and the 10K tuning, the core edge remains robust on a per-asset basis.
+
+Use the backtest engine to validate that, over a standard yearly period, the updated 10K-optimized system still has, **per asset**:
+
+- At least **~50 trades per year** per traded asset,
+- A win-rate between **70% and 100%** per asset,
+- An annual return between roughly **+60% and +300%** per asset.
+
+Your task:
+
+1. Identify or define a standard yearly period (e.g. 12 months of recent historical data) for testing.
+
+2. Run backtests using the updated 10K configuration across that period and compute, **for each asset**:
+
+   - Number of trades per year,
+   - Win-rate,
+   - Annual return (% and $) based on 10K starting equity and the current risk model.
+
+3. Check that:
+   - Each asset meets or is reasonably close to the target profile:
+     - ~50+ trades/year,
+     - 70–100% win-rate,
+     - +60–300% annual return,
+   while respecting The5ers 10K risk constraints.
+
+4. If an asset significantly fails these performance characteristics:
+   - Investigate whether:
+     - tunable parameters can be improved (within reasonable bounds),
+     - or that asset should be deemphasized or filtered out.
+   - Do **not** fundamentally alter the core Blueprint-Tradr entry logic; focus on parameter tuning and risk management.
+
+5. Summarize in comments or logs how the updated configuration compares to this target profile, showing that the strategy edge remains strong under the 10K challenge optimization.
+
+==================================================
+PART 9 – PREPARATION FOR AUTOMATIC MT5 EXECUTION
+==================================================
+
+The bot will be used as an **automatic trading bot connected to MT5** on a Windows VPS.
+
+You don’t need to write the MT5 executor here, but while making the above changes, ensure:
+
+1. The decision/engine layer produces clear, structured trade information that an external Python script can consume, including:
+   - symbol,
+   - side (BUY/SELL),
+   - entry price,
+   - stop loss,
+   - take profit,
+   - risk % and/or final volume (lots),
+   - unique trade ID,
+   - timestamps.
+
+2. It remains straightforward for an external script (running on the VPS with the MetaTrader5 library) to:
+   - access approved trades (via an API, function, or data structure),
+   - execute them on MT5,
+   - map fills and updates back to the internal trade IDs if needed.
+
+==================================================
+PART 10 – FINAL CHECKLIST
+==================================================
+
+After your changes, please ensure:
+
+1. The **live/paper trading logic and backtest logic share the same core strategy implementation**.
+2. The **default configuration is clearly tuned for a The5ers High Stakes 10K profile**.
+3. The month/year challenge simulation and `/pass month year`:
+   - Use the 10K risk model,
+   - Respect The5ers 10K rules,
+   - Report clearly:
+     - Phase 1 passed: YES/NO,
+     - Phase 2 passed: YES/NO,
+     - If both passed: days to pass, total profit (% and $), total trades.
+4. The optimization loop:
+   - Attempts to tune parameters to produce robust challenge performance across multiple months,
+   - Never violates The5ers risk constraints,
+   - Does not rewrite the fundamental entry/exit strategy.
+5. The deleted pairs (NATGAS, XPTUSD, XPDUSD, XAUGBP, XAUAUD, XCUUSD) are completely removed from live and backtest trading.
+6. The Discord bot:
+   - Only posts **new trades and new updates** after startup,
+   - Does not spam historical trades or updates when restarted,
+   - Keeps a similar formatting style to the current implementation.
+7. Yearly backtests per asset demonstrate:
+   - ~50+ trades/year per asset,
+   - 70–100% win-rate per asset,
+   - ~+60–300% annual return per asset under the 10K risk model, within realistic variation and without breaking The5ers rules.
+
+Do NOT drastically change the underlying Blueprint-Tradr entry strategy or the overall Discord look & feel. Focus on:
+
+- Strategy/backtest alignment,
+- 10K The5ers challenge optimization,
+- Month/year challenge simulation and `/pass` interface,
+- Automated but reasonable parameter optimization,
+- Asset universe cleanup,
+- Future-only Discord posting behaviour,
+- Per-asset performance validation to confirm the edge remains strong.
+
+Now, inspect the existing code in this Replit project and implement these changes step by step.
