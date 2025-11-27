@@ -53,7 +53,7 @@ from config import ACCOUNT_SIZE, RISK_PER_TRADE_PCT
 
 from backtest import run_backtest
 from data import get_ohlcv, get_cache_stats, clear_cache, get_current_prices
-from risk_manager import get_risk_manager, RiskCheckResult
+from risk_manager import get_risk_manager, RiskCheckResult, TradeRecord
 from discord_output import create_phase_progress_embed
 
 
@@ -95,6 +95,112 @@ def _ensure_trade_progress(trade_key: str) -> None:
             "tp1": False, "tp2": False, "tp3": False,
             "tp4": False, "tp5": False, "sl": False,
         }
+
+
+def activate_trade(
+    trade: ScanResult,
+    entry_price: float,
+    sizing: dict,
+) -> tuple[bool, str]:
+    """
+    Activate a trade through the risk manager.
+    
+    Returns (success, message) tuple.
+    """
+    rm = get_risk_manager()
+    trade_key = f"{trade.symbol}_{trade.direction}"
+    
+    if trade_key in ACTIVE_TRADES:
+        return False, f"Trade {trade_key} already active"
+    
+    risk_usd = sizing.get("risk_usd", 100)
+    lot_size = sizing.get("lot_size", 0.01)
+    
+    check_result, check_message = rm.can_add_trade(risk_usd=risk_usd)
+    
+    if check_result not in (RiskCheckResult.ALLOWED, RiskCheckResult.WARNING_NEAR_LIMIT):
+        return False, check_message
+    
+    trade.entry = entry_price
+    entry_time = datetime.utcnow()
+    
+    trade_record = TradeRecord(
+        trade_id=trade_key,
+        symbol=trade.symbol,
+        direction=trade.direction,
+        entry_price=entry_price,
+        stop_loss=trade.stop_loss,
+        lot_size=lot_size,
+        risk_usd=risk_usd,
+        risk_pct=RISK_PER_TRADE_PCT,
+        entry_datetime=entry_time,
+    )
+    rm.open_trade(trade_record)
+    
+    ACTIVE_TRADES[trade_key] = trade
+    TRADE_ENTRY_DATES[trade_key] = entry_time
+    TRADE_SIZING[trade_key] = sizing
+    _ensure_trade_progress(trade_key)
+    
+    warning = f" (Warning: {check_message})" if check_result == RiskCheckResult.WARNING_NEAR_LIMIT else ""
+    return True, f"Trade activated. Open risk: ${rm.get_open_risk_usd():.2f}{warning}"
+
+
+def close_trade_with_pnl(
+    trade_key: str,
+    exit_price: float,
+    pnl_usd: float,
+    reason: str = "Manual close",
+) -> tuple[bool, str]:
+    """
+    Close a trade and update the risk manager.
+    
+    Returns (success, message) tuple.
+    """
+    rm = get_risk_manager()
+    
+    if trade_key not in ACTIVE_TRADES:
+        return False, f"Trade {trade_key} not found"
+    
+    closed_trade = rm.close_trade(
+        trade_id=trade_key,
+        exit_price=exit_price,
+        pnl_usd=pnl_usd,
+    )
+    
+    ACTIVE_TRADES.pop(trade_key, None)
+    TRADE_PROGRESS.pop(trade_key, None)
+    TRADE_SIZING.pop(trade_key, None)
+    TRADE_ENTRY_DATES.pop(trade_key, None)
+    
+    if closed_trade:
+        return True, f"{reason}. P&L: ${pnl_usd:.2f}, Balance: ${rm.current_balance:.2f}"
+    else:
+        return True, f"{reason}. Trade not tracked in risk manager."
+
+
+def clear_all_trades() -> tuple[int, str]:
+    """
+    Clear all active trades from tracking.
+    
+    Returns (count, message) tuple.
+    """
+    rm = get_risk_manager()
+    count = len(ACTIVE_TRADES)
+    
+    for trade_key in list(ACTIVE_TRADES.keys()):
+        rm.close_trade(
+            trade_id=trade_key,
+            exit_price=0,
+            pnl_usd=0,
+        )
+    
+    ACTIVE_TRADES.clear()
+    TRADE_PROGRESS.clear()
+    TRADE_SIZING.clear()
+    TRADE_ENTRY_DATES.clear()
+    
+    return count, f"Cleared {count} trades. Open risk reset to ${rm.get_open_risk_usd():.2f}"
 
 
 def _compute_trade_progress(idea: ScanResult, live_prices: dict = None) -> tuple[float, float]:
@@ -246,30 +352,37 @@ async def check_trade_updates(updates_channel: discord.abc.Messageable) -> None:
             closed = True
 
         if closed:
-            if all_tps_hit and not progress["sl"]:
+            if progress["sl"]:
+                pnl_usd = -risk_usd
+                reason = "Stop Loss Hit"
+            elif all_tps_hit:
                 risk = abs(entry - sl) if entry and sl else 1.0
                 total_rr = sum(
                     ((level - entry) / risk if direction == "bullish" else (entry - level) / risk)
                     for _, _, level, _ in tp_levels if level is not None
                 ) / 3
+                pnl_usd = risk_usd * total_rr
+                reason = "All TPs Hit"
                 
                 entry_dt = TRADE_ENTRY_DATES.get(key)
                 embed = create_trade_closed_embed(
                     symbol=trade.symbol,
                     direction=direction,
                     avg_exit=price,
-                    total_result_usd=risk_usd * total_rr,
+                    total_result_usd=pnl_usd,
                     total_result_pct=RISK_PER_TRADE_PCT * total_rr * 100,
                     total_result_r=total_rr,
-                    exit_reason="All TPs Hit",
+                    exit_reason=reason,
                     entry_datetime=entry_dt,
                 )
                 embeds_to_send.append(embed)
+            else:
+                pnl_usd = 0
+                reason = "Unknown"
             
-            ACTIVE_TRADES.pop(key, None)
-            TRADE_PROGRESS.pop(key, None)
-            TRADE_SIZING.pop(key, None)
-            TRADE_ENTRY_DATES.pop(key, None)
+            success, close_msg = close_trade_with_pnl(key, price, pnl_usd, reason)
+            if success:
+                print(f"[check_trade_updates] {trade.symbol}: {close_msg}")
 
         for embed in embeds_to_send:
             await updates_channel.send(embed=embed)
@@ -585,12 +698,8 @@ async def clearcache(interaction: discord.Interaction):
 
 @bot.tree.command(name="cleartrades", description="Clear all active trade tracking.")
 async def cleartrades(interaction: discord.Interaction):
-    count = len(ACTIVE_TRADES)
-    ACTIVE_TRADES.clear()
-    TRADE_PROGRESS.clear()
-    TRADE_SIZING.clear()
-    TRADE_ENTRY_DATES.clear()
-    await interaction.response.send_message(f"Cleared {count} active trades.", ephemeral=True)
+    count, message = clear_all_trades()
+    await interaction.response.send_message(message, ephemeral=True)
 
 
 @bot.tree.command(name="debug", description="Show bot health and status summary.")
@@ -742,11 +851,7 @@ async def autoscan_loop():
             live_prices = await asyncio.to_thread(get_current_prices, list(set(active_trade_symbols)))
             print(f"[autoscan] Got live prices for {len(live_prices)} symbols")
         
-        rm = get_risk_manager()
-        
         for trade in pending_trades:
-            trade_key = f"{trade.symbol}_{trade.direction}"
-            
             live_price_data = live_prices.get(trade.symbol)
             if not live_price_data:
                 print(f"[autoscan] {trade.symbol}: SKIPPED - Could not fetch live price (check OANDA API credentials)")
@@ -757,46 +862,31 @@ async def autoscan_loop():
                 print(f"[autoscan] {trade.symbol}: SKIPPED - Live price invalid ({live_mid})")
                 continue
             
-            trade.entry = live_mid
-            
             sizing = calculate_position_size_5ers(
                 symbol=trade.symbol,
-                entry_price=trade.entry,
+                entry_price=live_mid,
                 stop_price=trade.stop_loss,
             )
-            risk_usd = sizing.get("risk_usd", 100)
             
-            risk_check = rm.validate_new_trade(
-                symbol=trade.symbol,
-                direction=trade.direction,
-                risk_usd=risk_usd,
-                current_open_trades=len(ACTIVE_TRADES),
-            )
+            success, message = activate_trade(trade, live_mid, sizing)
             
-            if not risk_check.allowed:
-                print(f"[autoscan] {trade.symbol}: BLOCKED by risk manager - {risk_check.rejection_reason}")
+            if not success:
+                print(f"[autoscan] {trade.symbol}: BLOCKED by risk manager - {message}")
                 blocked_embed = discord.Embed(
                     title=f"Trade Blocked: {trade.symbol}",
-                    description=risk_check.rejection_reason,
+                    description=message,
                     color=discord.Color.orange(),
                 )
                 blocked_embed.add_field(name="Direction", value=trade.direction, inline=True)
-                blocked_embed.add_field(name="Risk USD", value=f"${risk_usd:.2f}", inline=True)
-                blocked_embed.add_field(name="Warning Level", value=risk_check.warning_level or "None", inline=True)
+                blocked_embed.add_field(name="Risk USD", value=f"${sizing.get('risk_usd', 0):.2f}", inline=True)
                 await trades_channel.send(embed=blocked_embed)
                 continue
             
-            print(f"[autoscan] {trade.symbol}: Using live price {live_mid:.5f} as entry")
-            
-            entry_time = datetime.utcnow()
-            TRADE_ENTRY_DATES[trade_key] = entry_time
-            
-            ACTIVE_TRADES[trade_key] = trade
-            _ensure_trade_progress(trade_key)
+            print(f"[autoscan] {trade.symbol}: Using live price {live_mid:.5f} as entry - {message}")
 
             confluence_items = build_confluence_list(trade)
-            
-            TRADE_SIZING[trade_key] = sizing
+            trade_key = f"{trade.symbol}_{trade.direction}"
+            entry_time = TRADE_ENTRY_DATES.get(trade_key)
             
             embed = create_setup_embed(
                 symbol=trade.symbol,
@@ -813,8 +903,8 @@ async def autoscan_loop():
                 entry_datetime=entry_time,
             )
             
-            if risk_check.warning_level:
-                embed.add_field(name="Risk Warning", value=risk_check.warning_level, inline=False)
+            if "Warning:" in message:
+                embed.add_field(name="Risk Warning", value=message.split("Warning: ")[-1].rstrip(")"), inline=False)
             
             await trades_channel.send(embed=embed)
 
