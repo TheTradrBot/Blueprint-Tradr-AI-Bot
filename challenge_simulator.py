@@ -275,10 +275,10 @@ def simulate_challenge_for_month(
 
 def format_challenge_result(result: ChallengeResult) -> str:
     """Format challenge result for Discord or console output."""
-    month_name = calendar.month_name[result.month]
+    month_abbr = calendar.month_abbr[result.month]
     
     lines = [
-        f"**Challenge Simulation: {month_name} {result.year}**",
+        f"**Challenge Simulation: {month_abbr} {result.year}**",
         "",
     ]
     
