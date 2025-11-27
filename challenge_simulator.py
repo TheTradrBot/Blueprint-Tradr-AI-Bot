@@ -179,7 +179,12 @@ def simulate_challenge_for_month(
     
     trading_day_count = 0
     
+    challenge_failed = False
+    
     for trade in all_trades:
+        if challenge_failed:
+            break
+            
         trade_date = trade.get("exit_date", trade.get("entry_date", ""))
         rr = trade.get("rr", 0)
         pnl_usd = rr * risk_per_trade_usd
@@ -197,10 +202,16 @@ def simulate_challenge_for_month(
         day_loss = daily_pnl[trade_date]
         if day_loss < 0 and abs(day_loss) > account_size * max_daily_loss:
             result.daily_loss_violations += 1
+            challenge_failed = True
+            result.failure_reason = f"Daily loss limit breached ({abs(day_loss)/account_size*100:.1f}% > {max_daily_loss*100:.0f}%)"
+            print(f"[Challenge Simulator] FAILED: Daily loss limit breached on {trade_date}")
         
         total_dd = account_size - balance
         if total_dd > account_size * max_total_loss:
             result.total_loss_violations += 1
+            challenge_failed = True
+            result.failure_reason = f"Total loss limit breached ({total_dd/account_size*100:.1f}% > {max_total_loss*100:.0f}%)"
+            print(f"[Challenge Simulator] FAILED: Total loss limit breached on {trade_date}")
         
         daily_dd_pct = abs(day_loss) / account_size * 100 if day_loss < 0 else 0
         if daily_dd_pct > result.max_daily_drawdown_pct:
@@ -210,26 +221,27 @@ def simulate_challenge_for_month(
         if total_dd_pct > result.max_total_drawdown_pct:
             result.max_total_drawdown_pct = total_dd_pct
         
-        if current_phase == 1:
-            phase1_profit = (balance - phase1_start_balance) / phase1_start_balance
-            if phase1_profit >= phase1_target:
-                result.phase1_passed = True
-                result.phase1_profit_pct = phase1_profit * 100
-                result.phase1_days = trading_day_count
-                phase1_complete_day = trading_day_count
-                
-                current_phase = 2
-                phase2_start_balance = balance
-                print(f"[Challenge Simulator] Phase 1 passed on day {trading_day_count}: +{phase1_profit*100:.1f}%")
-        elif current_phase == 2:
-            phase2_profit = (balance - phase2_start_balance) / phase2_start_balance
-            if phase2_profit >= phase2_target:
-                result.phase2_passed = True
-                result.phase2_profit_pct = phase2_profit * 100
-                result.phase2_days = trading_day_count - phase1_complete_day
-                phase2_complete_day = trading_day_count
-                print(f"[Challenge Simulator] Phase 2 passed on day {trading_day_count}: +{phase2_profit*100:.1f}%")
-                break
+        if not challenge_failed:
+            if current_phase == 1:
+                phase1_profit = (balance - phase1_start_balance) / phase1_start_balance
+                if phase1_profit >= phase1_target:
+                    result.phase1_passed = True
+                    result.phase1_profit_pct = phase1_profit * 100
+                    result.phase1_days = trading_day_count
+                    phase1_complete_day = trading_day_count
+                    
+                    current_phase = 2
+                    phase2_start_balance = balance
+                    print(f"[Challenge Simulator] Phase 1 passed on day {trading_day_count}: +{phase1_profit*100:.1f}%")
+            elif current_phase == 2:
+                phase2_profit = (balance - phase2_start_balance) / phase2_start_balance
+                if phase2_profit >= phase2_target:
+                    result.phase2_passed = True
+                    result.phase2_profit_pct = phase2_profit * 100
+                    result.phase2_days = trading_day_count - phase1_complete_day
+                    phase2_complete_day = trading_day_count
+                    print(f"[Challenge Simulator] Phase 2 passed on day {trading_day_count}: +{phase2_profit*100:.1f}%")
+                    break
     
     result.trading_days = len(daily_pnl)
     
