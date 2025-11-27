@@ -7,3 +7,6 @@ requests
 discord.py
 pandas
 requests
+discord.py
+pandas
+requests
