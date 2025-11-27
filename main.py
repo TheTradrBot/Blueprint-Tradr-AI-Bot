@@ -671,10 +671,10 @@ async def live(interaction: discord.Interaction):
         await interaction.followup.send(f"Error fetching live prices: {str(e)}")
 
 
-@bot.tree.command(name="backtest", description='Backtest strategy for period or yearly. Example: /backtest EUR_USD "2024" or /backtest EUR_USD "Jan - Dec 2024"')
+@bot.tree.command(name="backtest", description="Backtest strategy for period or yearly analysis")
 @app_commands.describe(
     asset="The asset to backtest (e.g., EUR_USD)",
-    period="Time period (YYYY for yearly) or date range (e.g., 'Jan 2024 - Dec 2024')"
+    period="YYYY for yearly, or date range (e.g., 'Jan 2024 - Dec 2024')"
 )
 async def backtest_cmd(interaction: discord.Interaction, asset: str, period: str):
     await interaction.response.defer()
@@ -906,10 +906,10 @@ async def pass_command(interaction: discord.Interaction, month: int, year: int):
         await interaction.followup.send(f"Error running challenge simulation: {str(e)}")
 
 
-@bot.tree.command(name="output", description="Export detailed trades from challenge simulation for charting validation.")
+@bot.tree.command(name="output", description="Export trades from challenge with entry/exit dates for validation")
 @app_commands.describe(
     month="Month (1-12)",
-    year="Year (e.g., 2024)"
+    year="Year (e.g., 2024 or 2025)"
 )
 async def output_command(interaction: discord.Interaction, month: int, year: int):
     """Export all trades from challenge simulation grouped by asset with entry/exit dates and prices."""
