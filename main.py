@@ -671,17 +671,54 @@ async def live(interaction: discord.Interaction):
         await interaction.followup.send(f"Error fetching live prices: {str(e)}")
 
 
-@bot.tree.command(name="backtest", description='Backtest the strategy. Example: /backtest EUR_USD "Jan 2024 - Dec 2024"')
+@bot.tree.command(name="backtest", description='Backtest strategy for period or yearly. Example: /backtest EUR_USD "2024" or /backtest EUR_USD "Jan - Dec 2024"')
 @app_commands.describe(
     asset="The asset to backtest (e.g., EUR_USD)",
-    period="The time period (e.g., 'Jan 2024 - Dec 2024')"
+    period="Time period (YYYY for yearly) or date range (e.g., 'Jan 2024 - Dec 2024')"
 )
 async def backtest_cmd(interaction: discord.Interaction, asset: str, period: str):
     await interaction.response.defer()
     
     try:
-        result = run_backtest(asset.upper().replace("/", "_"), period)
-        msg = format_backtest_result(result)
+        asset_clean = asset.upper().replace("/", "_")
+        
+        # Check if period is a single year for yearly analysis
+        if period.strip().isdigit() and len(period.strip()) == 4:
+            from backtest import run_yearly_backtest, validate_asset_performance
+            year = int(period.strip())
+            result = await asyncio.to_thread(run_yearly_backtest, asset_clean, year)
+            
+            # Format yearly results with validation
+            lines = [
+                f"**Yearly Backtest: {asset_clean} / {year}**",
+                f"**Profile:** {result.get('profile_name', 'N/A')}",
+                "",
+                f"**Yearly Performance:**",
+                f"  Trades: {result['total_trades']}",
+                f"  Win Rate: {result['win_rate']:.1f}%",
+                f"  Return: {result['net_return_pct']:+.1f}% (+${result['total_profit_usd']:,.0f})",
+                f"  Avg Expectancy: {result['avg_rr']:+.2f}R/trade",
+                "",
+                f"**Validation (50+ trades, 70-100% WR):**",
+                f"  {result['validation']['trade_count_reason']}",
+                f"  {result['validation']['win_rate_reason']}",
+                f"  {result['validation']['profitability_reason']}",
+                f"  {result['validation']['expectancy_reason']}",
+                "",
+                f"**Status:** {'✓ APPROVED' if result['validation']['all_pass'] else '✗ NEEDS WORK'}",
+                "",
+                "**Monthly Breakdown:**",
+            ]
+            
+            for month_result in result.get("monthly_results", []):
+                lines.append(f"  {month_result['period']}: {month_result['total_trades']} trades, {month_result['win_rate']:.1f}% WR, {month_result['net_return_pct']:+.1f}%")
+            
+            msg = "\n".join(lines)
+        else:
+            # Single period backtest
+            result = run_backtest(asset_clean, period)
+            msg = format_backtest_result(result)
+        
         chunks = split_message(msg, limit=1900)
         for chunk in chunks:
             await interaction.followup.send(chunk)

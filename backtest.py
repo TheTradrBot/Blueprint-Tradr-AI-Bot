@@ -685,3 +685,119 @@ def run_backtest(asset: str, period: str) -> Dict:
         "profile_name": profile.display_name,
         "phase1_simulation": phase1_sim,
     }
+
+
+def validate_asset_performance(result: dict) -> dict:
+    """
+    Validate asset performance against target profile thresholds.
+    
+    Target Profile (50+ trades, 70-100% WR):
+    - Min 50 trades per year for significance
+    - Win rate 70-100% for consistency
+    - Positive return for profitability
+    
+    Returns validation dict with pass/fail status and reasons.
+    """
+    validations = {
+        "trade_count_pass": result["total_trades"] >= 50,
+        "trade_count_value": result["total_trades"],
+        "trade_count_reason": f"{'✓' if result['total_trades'] >= 50 else '✗'} {result['total_trades']}/50+ trades",
+        
+        "win_rate_pass": 70 <= result["win_rate"] <= 100,
+        "win_rate_value": result["win_rate"],
+        "win_rate_reason": f"{'✓' if 70 <= result['win_rate'] <= 100 else '✗'} {result['win_rate']:.1f}% (target: 70-100%)",
+        
+        "profitability_pass": result["net_return_pct"] > 0,
+        "profitability_value": result["net_return_pct"],
+        "profitability_reason": f"{'✓' if result['net_return_pct'] > 0 else '✗'} {result['net_return_pct']:+.1f}% return",
+        
+        "expectancy_pass": result["avg_rr"] > 0,
+        "expectancy_value": result["avg_rr"],
+        "expectancy_reason": f"{'✓' if result['avg_rr'] > 0 else '✗'} {result['avg_rr']:+.2f}R expectancy",
+    }
+    
+    validations["all_pass"] = all([
+        validations["trade_count_pass"],
+        validations["win_rate_pass"],
+        validations["profitability_pass"],
+        validations["expectancy_pass"],
+    ])
+    
+    return validations
+
+
+def run_yearly_backtest(asset: str, year: int, profile=None):
+    """
+    Run backtest for each month of a year and aggregate per-asset metrics.
+    
+    Returns yearly summary with monthly breakdown and performance validation.
+    """
+    from config import ACTIVE_ACCOUNT_PROFILE
+    import calendar
+    
+    if profile is None:
+        profile = ACTIVE_ACCOUNT_PROFILE
+    
+    monthly_results = []
+    yearly_trades = []
+    yearly_profit = 0.0
+    yearly_return = 0.0
+    
+    print(f"\n{'='*60}")
+    print(f"YEARLY BACKTEST: {asset} / {year}")
+    print(f"Profile: {profile.display_name}")
+    print(f"{'='*60}\n")
+    
+    for month in range(1, 13):
+        month_name = calendar.month_name[month]
+        start_day = 1
+        
+        if month == 12:
+            end_day = 31
+        else:
+            end_day = calendar.monthrange(year, month + 1)[1] - 1
+        
+        period = f"{month_name} 1 - {end_day}, {year}"
+        
+        try:
+            result = run_backtest(asset, period, profile)
+            monthly_results.append(result)
+            yearly_trades.extend(result.get("trades", []))
+            yearly_profit += result["total_profit_usd"]
+            yearly_return += result["net_return_pct"]
+            
+            status = "✓" if result["win_rate"] >= 50 else "✗"
+            print(f"{month_name:>10}: {status} WR={result['win_rate']:5.1f}% | "
+                  f"Trades={result['total_trades']:3.0f} | "
+                  f"Return={result['net_return_pct']:+6.1f}%")
+        except Exception as e:
+            print(f"{month_name:>10}: ERROR - {str(e)[:40]}")
+            continue
+    
+    total_trades = len(yearly_trades)
+    yearly_win_rate = sum(1 for t in yearly_trades if t["rr"] > 0) / total_trades * 100 if total_trades > 0 else 0
+    avg_rr = sum(t["rr"] for t in yearly_trades) / total_trades if total_trades > 0 else 0
+    
+    print(f"\n{'='*60}")
+    print(f"YEARLY SUMMARY: {asset} / {year}")
+    print(f"Total Trades: {total_trades}")
+    print(f"Win Rate: {yearly_win_rate:.1f}%")
+    print(f"Yearly Return: {yearly_return:.1f}% (+${yearly_profit:,.0f})")
+    print(f"Avg Expectancy: {avg_rr:+.2f}R/trade")
+    print(f"{'='*60}\n")
+    
+    yearly_result = {
+        "asset": asset,
+        "year": year,
+        "total_trades": total_trades,
+        "win_rate": yearly_win_rate,
+        "net_return_pct": yearly_return,
+        "total_profit_usd": yearly_profit,
+        "avg_rr": avg_rr,
+        "monthly_results": monthly_results,
+        "trades": yearly_trades,
+    }
+    
+    yearly_result["validation"] = validate_asset_performance(yearly_result)
+    
+    return yearly_result
