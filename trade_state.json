@@ -1,11 +1,11 @@
 {
   "posted_trades": [
-    "BCO_USD_bullish_63.453",
     "GBP_CAD_bullish_1.857",
     "NZD_USD_bullish_0.56651",
-    "WTICO_USD_bullish_59.205"
+    "WTICO_USD_bullish_59.205",
+    "BCO_USD_bullish_63.453"
   ],
   "posted_updates": {},
-  "last_scan_time": "2025-11-27T23:22:05.728161+00:00",
-  "last_updated": "2025-11-27T23:22:05.728188+00:00"
+  "last_scan_time": "2025-11-27T23:38:56.916004+00:00",
+  "last_updated": "2025-11-27T23:38:56.916033+00:00"
 }

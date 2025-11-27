@@ -757,9 +757,11 @@ async def debug_cmd(interaction: discord.Interaction):
     """Health and status check for the bot."""
     try:
         import platform
-        from data import OANDA_API_KEY, OANDA_ACCOUNT_ID
+        import os
         
-        oanda_status = "Connected" if OANDA_API_KEY and OANDA_ACCOUNT_ID else "Not configured"
+        oanda_api_key = os.getenv("OANDA_API_KEY", "").strip()
+        oanda_account_id = os.getenv("OANDA_ACCOUNT_ID", "").strip()
+        oanda_status = "Connected" if oanda_api_key and oanda_account_id else "Not configured"
         
         cache_stats = get_cache_stats()
         
