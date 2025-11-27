@@ -175,6 +175,7 @@ def _maybe_exit_trade(
     direction = trade["direction"]
     entry = trade["entry"]
     sl = trade.get("trailing_sl", trade["sl"])
+    orig_sl = trade["sl"]
     tp1 = trade["tp1"]
     tp2 = trade["tp2"]
     tp3 = trade["tp3"]
@@ -193,6 +194,11 @@ def _maybe_exit_trade(
                 return {
                     "entry_date": trade["entry_date"].isoformat(),
                     "exit_date": exit_date.isoformat(),
+                    "entry": entry,
+                    "sl": orig_sl,
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "tp3": tp3,
                     "direction": direction,
                     "rr": max(rr, 0.0),
                     "exit_reason": "TP1+Trail",
@@ -201,6 +207,11 @@ def _maybe_exit_trade(
                 return {
                     "entry_date": trade["entry_date"].isoformat(),
                     "exit_date": exit_date.isoformat(),
+                    "entry": entry,
+                    "sl": orig_sl,
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "tp3": tp3,
                     "direction": direction,
                     "rr": -1.0,
                     "exit_reason": "SL",
@@ -212,6 +223,11 @@ def _maybe_exit_trade(
                 return {
                     "entry_date": trade["entry_date"].isoformat(),
                     "exit_date": exit_date.isoformat(),
+                    "entry": entry,
+                    "sl": orig_sl,
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "tp3": tp3,
                     "direction": direction,
                     "rr": rr,
                     "exit_reason": "TP3",
@@ -221,6 +237,11 @@ def _maybe_exit_trade(
                 return {
                     "entry_date": trade["entry_date"].isoformat(),
                     "exit_date": exit_date.isoformat(),
+                    "entry": entry,
+                    "sl": orig_sl,
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "tp3": tp3,
                     "direction": direction,
                     "rr": rr,
                     "exit_reason": "TP2",
@@ -233,6 +254,11 @@ def _maybe_exit_trade(
                 return {
                     "entry_date": trade["entry_date"].isoformat(),
                     "exit_date": exit_date.isoformat(),
+                    "entry": entry,
+                    "sl": orig_sl,
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "tp3": tp3,
                     "direction": direction,
                     "rr": 0.0,
                     "exit_reason": "TP1+Trail",
@@ -251,6 +277,11 @@ def _maybe_exit_trade(
                 return {
                     "entry_date": trade["entry_date"].isoformat(),
                     "exit_date": exit_date.isoformat(),
+                    "entry": entry,
+                    "sl": orig_sl,
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "tp3": tp3,
                     "direction": direction,
                     "rr": max(rr, 0.0),
                     "exit_reason": "TP1+Trail",
@@ -259,6 +290,11 @@ def _maybe_exit_trade(
                 return {
                     "entry_date": trade["entry_date"].isoformat(),
                     "exit_date": exit_date.isoformat(),
+                    "entry": entry,
+                    "sl": orig_sl,
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "tp3": tp3,
                     "direction": direction,
                     "rr": -1.0,
                     "exit_reason": "SL",
@@ -270,6 +306,11 @@ def _maybe_exit_trade(
                 return {
                     "entry_date": trade["entry_date"].isoformat(),
                     "exit_date": exit_date.isoformat(),
+                    "entry": entry,
+                    "sl": orig_sl,
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "tp3": tp3,
                     "direction": direction,
                     "rr": rr,
                     "exit_reason": "TP3",
@@ -279,6 +320,11 @@ def _maybe_exit_trade(
                 return {
                     "entry_date": trade["entry_date"].isoformat(),
                     "exit_date": exit_date.isoformat(),
+                    "entry": entry,
+                    "sl": orig_sl,
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "tp3": tp3,
                     "direction": direction,
                     "rr": rr,
                     "exit_reason": "TP2",
@@ -291,6 +337,11 @@ def _maybe_exit_trade(
                 return {
                     "entry_date": trade["entry_date"].isoformat(),
                     "exit_date": exit_date.isoformat(),
+                    "entry": entry,
+                    "sl": orig_sl,
+                    "tp1": tp1,
+                    "tp2": tp2,
+                    "tp3": tp3,
                     "direction": direction,
                     "rr": 0.0,
                     "exit_reason": "TP1+Trail",
