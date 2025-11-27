@@ -54,6 +54,36 @@ Set `ACCOUNT_PROFILE=the5ers_100k_high_stakes` to switch profiles.
 
 ## Recent Changes
 
+**November 27, 2025 - Challenge Simulation & Optimization**
+
+Added challenge simulation and optimization capabilities:
+
+### New Features
+
+1. **Challenge Simulator** (`challenge_simulator.py`)
+   - Month/year challenge simulation: `/pass 9 2024`
+   - Phase 1 (+8%) and Phase 2 (+5%) tracking
+   - Daily/total drawdown monitoring
+   - Detailed pass/fail reporting
+
+2. **Duplicate Prevention** (`trade_state.py`)
+   - Persistent trade state tracking
+   - Prevents duplicate Discord posts on bot restart
+   - JSON-based state persistence
+
+3. **Parameter Optimizer** (`optimizer.py`)
+   - Grid search across parameter space
+   - Target metrics: 50+ trades/year, 70-100% WR, +60-300% return
+   - Best configuration saving/loading
+
+### Removed Assets (Not Available on The5ers)
+- NATGAS, XPTUSD, XPDUSD, XAUGBP, XAUAUD, XCUUSD
+
+### New Discord Command
+- `/pass [month] [year]` - Simulate 10K challenge for a specific month
+
+---
+
 **November 27, 2025 - The5ers High Stakes 10K Optimization**
 
 Major refactoring to adapt the bot from a 100K account model to The5ers High Stakes 10K challenge:
@@ -208,6 +238,7 @@ Preferred communication style: Simple, everyday language.
 
 **Analysis:**
 - `/backtest [asset] [period]` - Test strategy performance
+- `/pass [month] [year]` - Simulate 10K challenge for a month
 
 **System:**
 - `/cache` - View cache statistics
