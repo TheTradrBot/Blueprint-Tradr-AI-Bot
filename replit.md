@@ -54,6 +54,45 @@ Set `ACCOUNT_PROFILE=the5ers_100k_high_stakes` to switch profiles.
 
 ## Recent Changes
 
+**November 27, 2025 - Strategy Engine Unification & Full-Month Metrics**
+
+Major refactoring to ensure backtest/pass reliability and full-month metrics:
+
+### Strategy Engine Unification
+
+All trading modes now use the SAME strategy logic from `strategy_core.py`:
+- **Live Trading** (`strategy.py`) - calls `generate_signals()`
+- **Backtesting** (`backtest.py`) - calls `_compute_confluence_flags()`
+- **Challenge Simulation** (`challenge_simulator.py`) - calls `run_backtest()`
+
+**Reliability Guarantee**: When you run `/backtest` or `/pass`, you see EXACTLY what the bot would do live with the same parameters.
+
+### /pass Command Enhancement
+
+The `/pass` command now shows TWO distinct metric sets:
+
+**A. Challenge Completion Metrics**
+- Profit at the moment both phases are passed
+- Number of trades at completion
+- Days to complete challenge
+
+**B. Full-Month Performance**
+- Total profit for ALL trades in the entire month
+- Total trades for the full month
+- Win rate for full month
+- Max drawdowns (daily and total)
+
+This addresses the requirement to clearly distinguish between "profit when challenge passed" vs "full month profit including all trades."
+
+### Removed Assets Validation
+
+Added validation guard to prevent trading of removed assets:
+- NATGAS, XPTUSD, XPDUSD, XAUGBP, XAUAUD, XCUUSD
+
+Use `validate_asset_not_removed(asset)` to check any asset.
+
+---
+
 **November 27, 2025 - Challenge Simulation & Optimization**
 
 Added challenge simulation and optimization capabilities:
@@ -65,6 +104,7 @@ Added challenge simulation and optimization capabilities:
    - Phase 1 (+8%) and Phase 2 (+5%) tracking
    - Daily/total drawdown monitoring
    - Detailed pass/fail reporting
+   - **NEW**: Continues trading until month end for full metrics
 
 2. **Duplicate Prevention** (`trade_state.py`)
    - Persistent trade state tracking
@@ -156,6 +196,12 @@ Preferred communication style: Simple, everyday language.
 
 ### Core Components
 
+0. **Strategy Core** (`strategy_core.py`) - **SINGLE SOURCE OF TRUTH**
+   - Unified strategy logic used by ALL modes
+   - `generate_signals()` - Signal generation
+   - `simulate_trades()` - Trade simulation
+   - `_compute_confluence_flags()` - Confluence scoring
+
 1. **Account Profiles** (`account_profiles.py`)
    - Prop firm challenge configurations
    - Risk limits and phase targets
@@ -166,16 +212,17 @@ Preferred communication style: Simple, everyday language.
    - Trade validation
    - Phase progress monitoring
 
-3. **Strategy Engine** (`strategy.py`)
+3. **Strategy Module** (`strategy.py`)
+   - Live scanning interface
+   - Calls `strategy_core.generate_signals()`
    - 7-pillar confluence evaluation
    - Multi-timeframe analysis (M, W, D, H4)
-   - ScanResult dataclass with setup info
 
 4. **Backtest Engine** (`backtest.py`)
+   - Calls `strategy_core._compute_confluence_flags()`
    - Walk-forward simulation
    - No look-ahead bias
    - Challenge phase simulation
-   - Conservative exit logic
 
 5. **Signal Output** (`signal_output.py`)
    - MT5-ready signal format

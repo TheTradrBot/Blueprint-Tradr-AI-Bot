@@ -1,11 +1,36 @@
 """
 Strategy Core Module for Blueprint Trader AI.
 
-This module provides the single source of truth for trading rules,
-used by both backtests and live scanning/Discord outputs.
+============================================================================
+SINGLE SOURCE OF TRUTH - SHARED STRATEGY ENGINE
+============================================================================
+
+This module provides the UNIFIED strategy logic used by ALL trading modes:
+
+1. LIVE TRADING (via strategy.py -> scan_single_asset -> generate_signals)
+   - Real-time scanning and signal generation
+   - Discord trade announcements
+
+2. BACKTESTING (via backtest.py -> run_backtest -> _compute_confluence_flags)
+   - Historical walk-forward simulation
+   - Uses same confluence rules and filters
+
+3. CHALLENGE SIMULATION (via challenge_simulator.py -> run_backtest)
+   - The5ers High Stakes 10K challenge simulation
+   - Applies same strategy logic as live trading
+
+RELIABILITY GUARANTEE:
+When you run /backtest or /pass, you see EXACTLY what the bot would do
+live with the same parameters. There is no separate "toy" logic.
+
+Key functions:
+- generate_signals(): Core signal generation with multi-timeframe analysis
+- simulate_trades(): Walk-forward trade simulation (no look-ahead bias)
+- _compute_confluence_flags(): Shared confluence scoring used everywhere
 
 The strategy is parameterized to allow optimization while staying
 faithful to the Blueprint confluence-based approach.
+============================================================================
 """
 
 from __future__ import annotations

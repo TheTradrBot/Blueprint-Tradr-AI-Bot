@@ -120,6 +120,31 @@ CRYPTO_ASSETS = [
     "BCH_USD",
 ]
 
+REMOVED_ASSETS = [
+    "NATGAS",
+    "XPTUSD", "XPT_USD",
+    "XPDUSD", "XPD_USD",
+    "XAUGBP", "XAU_GBP",
+    "XAUAUD", "XAU_AUD",
+    "XCUUSD", "XCU_USD",
+]
+
+
+def validate_asset_not_removed(asset: str) -> bool:
+    """
+    Validate that an asset is not in the removed list.
+    
+    These assets have been explicitly removed from live trading and backtests:
+    - NATGAS, XPTUSD, XPDUSD, XAUGBP, XAUAUD, XCUUSD
+    
+    Returns True if asset is valid (not removed), False otherwise.
+    """
+    normalized = asset.upper().replace("_", "")
+    for removed in REMOVED_ASSETS:
+        if normalized == removed.replace("_", ""):
+            return False
+    return True
+
 
 def all_market_instruments() -> list[str]:
     """All instruments Blueprint can scan."""

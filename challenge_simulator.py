@@ -33,7 +33,16 @@ from backtest import run_backtest
 
 @dataclass
 class ChallengeResult:
-    """Results from a challenge simulation."""
+    """
+    Results from a challenge simulation.
+    
+    Contains TWO sets of metrics:
+    1. Challenge completion metrics (profit at time both phases passed)
+    2. Full-month metrics (all trades for the entire month)
+    
+    This ensures we can see both when the challenge was passed AND
+    what the full month's performance would have been.
+    """
     year: int
     month: int
     
@@ -42,6 +51,16 @@ class ChallengeResult:
     both_passed: bool = False
     
     days_to_pass: int = 0
+    
+    profit_at_completion_pct: float = 0.0
+    profit_at_completion_usd: float = 0.0
+    trades_at_completion: int = 0
+    
+    full_month_profit_pct: float = 0.0
+    full_month_profit_usd: float = 0.0
+    full_month_trades: int = 0
+    full_month_win_rate: float = 0.0
+    
     total_profit_pct: float = 0.0
     total_profit_usd: float = 0.0
     total_trades: int = 0
@@ -73,6 +92,13 @@ class ChallengeResult:
             "phase2_passed": self.phase2_passed,
             "both_passed": self.both_passed,
             "days_to_pass": self.days_to_pass,
+            "profit_at_completion_pct": self.profit_at_completion_pct,
+            "profit_at_completion_usd": self.profit_at_completion_usd,
+            "trades_at_completion": self.trades_at_completion,
+            "full_month_profit_pct": self.full_month_profit_pct,
+            "full_month_profit_usd": self.full_month_profit_usd,
+            "full_month_trades": self.full_month_trades,
+            "full_month_win_rate": self.full_month_win_rate,
             "total_profit_pct": self.total_profit_pct,
             "total_profit_usd": self.total_profit_usd,
             "total_trades": self.total_trades,
@@ -154,7 +180,6 @@ def simulate_challenge_for_month(
     
     all_trades.sort(key=lambda t: t.get("exit_date", t.get("entry_date", "")))
     
-    result.total_trades = len(all_trades)
     result.trades = all_trades
     
     account_size = profile.starting_balance
@@ -171,6 +196,7 @@ def simulate_challenge_for_month(
     balance = account_size
     peak_balance = account_size
     phase1_start_balance = account_size
+    phase2_start_balance = account_size
     
     daily_pnl: Dict[str, float] = {}
     current_phase = 1
@@ -178,13 +204,15 @@ def simulate_challenge_for_month(
     phase2_complete_day = 0
     
     trading_day_count = 0
+    trade_count = 0
+    wins_count = 0
     
     challenge_failed = False
+    challenge_completed = False
+    balance_at_completion = account_size
+    trades_at_completion = 0
     
     for trade in all_trades:
-        if challenge_failed:
-            break
-            
         trade_date = trade.get("exit_date", trade.get("entry_date", ""))
         rr = trade.get("rr", 0)
         pnl_usd = rr * risk_per_trade_usd
@@ -195,19 +223,22 @@ def simulate_challenge_for_month(
         daily_pnl[trade_date] += pnl_usd
         
         balance += pnl_usd
+        trade_count += 1
+        if rr > 0:
+            wins_count += 1
         
         if balance > peak_balance:
             peak_balance = balance
         
         day_loss = daily_pnl[trade_date]
-        if day_loss < 0 and abs(day_loss) > account_size * max_daily_loss:
+        if not challenge_failed and day_loss < 0 and abs(day_loss) > account_size * max_daily_loss:
             result.daily_loss_violations += 1
             challenge_failed = True
             result.failure_reason = f"Daily loss limit breached ({abs(day_loss)/account_size*100:.1f}% > {max_daily_loss*100:.0f}%)"
             print(f"[Challenge Simulator] FAILED: Daily loss limit breached on {trade_date}")
         
         total_dd = account_size - balance
-        if total_dd > account_size * max_total_loss:
+        if not challenge_failed and total_dd > account_size * max_total_loss:
             result.total_loss_violations += 1
             challenge_failed = True
             result.failure_reason = f"Total loss limit breached ({total_dd/account_size*100:.1f}% > {max_total_loss*100:.0f}%)"
@@ -221,7 +252,7 @@ def simulate_challenge_for_month(
         if total_dd_pct > result.max_total_drawdown_pct:
             result.max_total_drawdown_pct = total_dd_pct
         
-        if not challenge_failed:
+        if not challenge_failed and not challenge_completed:
             if current_phase == 1:
                 phase1_profit = (balance - phase1_start_balance) / phase1_start_balance
                 if phase1_profit >= phase1_target:
@@ -240,18 +271,32 @@ def simulate_challenge_for_month(
                     result.phase2_profit_pct = phase2_profit * 100
                     result.phase2_days = trading_day_count - phase1_complete_day
                     phase2_complete_day = trading_day_count
+                    
+                    challenge_completed = True
+                    balance_at_completion = balance
+                    trades_at_completion = trade_count
+                    result.profit_at_completion_usd = balance - account_size
+                    result.profit_at_completion_pct = (balance - account_size) / account_size * 100
+                    result.trades_at_completion = trade_count
+                    
                     print(f"[Challenge Simulator] Phase 2 passed on day {trading_day_count}: +{phase2_profit*100:.1f}%")
-                    break
+                    print(f"[Challenge Simulator] Continuing to process remaining trades for full-month metrics...")
     
     result.trading_days = len(daily_pnl)
     
     min_day_profit_usd = account_size * min_profit_per_day
     result.profitable_days = sum(1 for pnl in daily_pnl.values() if pnl >= min_day_profit_usd)
     
+    result.full_month_profit_usd = balance - account_size
+    result.full_month_profit_pct = (balance - account_size) / account_size * 100
+    result.full_month_trades = trade_count
+    result.full_month_win_rate = (wins_count / trade_count * 100) if trade_count > 0 else 0.0
+    
+    result.total_trades = trade_count
     result.total_profit_usd = balance - account_size
     result.total_profit_pct = (balance - account_size) / account_size * 100
     
-    if result.phase1_passed and result.phase2_passed:
+    if result.phase1_passed and result.phase2_passed and not challenge_failed:
         result.both_passed = True
         result.days_to_pass = phase2_complete_day
     
@@ -274,39 +319,59 @@ def simulate_challenge_for_month(
 
 
 def format_challenge_result(result: ChallengeResult) -> str:
-    """Format challenge result for Discord or console output."""
+    """
+    Format challenge result for Discord or console output.
+    
+    Shows TWO distinct sections:
+    A. Challenge Results (completion metrics) - profit at the moment challenge is passed
+    B. Full-Month Performance - all trades for the entire month
+    
+    This addresses the user's requirement to clearly distinguish between
+    "profit at completion" vs "full month profit including all trades."
+    """
     month_abbr = calendar.month_abbr[result.month]
+    month_name = calendar.month_name[result.month]
     
     lines = [
-        f"**Challenge Simulation: {month_abbr} {result.year}**",
+        f"**Challenge Simulation: {month_name} {result.year}**",
         "",
+        "=" * 40,
+        "**A. CHALLENGE RESULTS (Completion Metrics)**",
+        "=" * 40,
     ]
     
     if result.both_passed:
         lines.append(f"Phase 1: PASSED (+{result.phase1_profit_pct:.1f}% in {result.phase1_days} days)")
         lines.append(f"Phase 2: PASSED (+{result.phase2_profit_pct:.1f}% in {result.phase2_days} days)")
         lines.append("")
-        lines.append(f"**Passed in: {result.days_to_pass} trading days**")
-        lines.append(f"**Total Profit: +{result.total_profit_pct:.1f}% (+${result.total_profit_usd:,.0f})**")
-        lines.append(f"**Total Trades: {result.total_trades}**")
+        lines.append(f"**CHALLENGE PASSED in {result.days_to_pass} trading days**")
+        lines.append(f"Profit at Completion: +{result.profit_at_completion_pct:.1f}% (+${result.profit_at_completion_usd:,.0f})")
+        lines.append(f"Trades at Completion: {result.trades_at_completion}")
     else:
         lines.append(f"Phase 1: {'PASSED' if result.phase1_passed else 'FAILED'}")
         lines.append(f"Phase 2: {'PASSED' if result.phase2_passed else 'FAILED'}")
         lines.append("")
-        lines.append(f"**Result: FAILED**")
+        lines.append(f"**CHALLENGE FAILED**")
         lines.append(f"Reason: {result.failure_reason}")
-        lines.append("")
-        lines.append(f"Final P&L: {'+' if result.total_profit_pct >= 0 else ''}{result.total_profit_pct:.1f}% (${result.total_profit_usd:+,.0f})")
-        lines.append(f"Total Trades: {result.total_trades}")
     
     lines.append("")
-    lines.append("**Risk Metrics:**")
-    lines.append(f"  Max Daily Drawdown: -{result.max_daily_drawdown_pct:.1f}%")
-    lines.append(f"  Max Total Drawdown: -{result.max_total_drawdown_pct:.1f}%")
-    lines.append(f"  Daily Loss Violations: {result.daily_loss_violations}")
-    lines.append(f"  Total Loss Violations: {result.total_loss_violations}")
-    lines.append(f"  Trading Days: {result.trading_days}")
-    lines.append(f"  Profitable Days: {result.profitable_days}")
+    lines.append("=" * 40)
+    lines.append("**B. FULL-MONTH PERFORMANCE (All Trades)**")
+    lines.append("=" * 40)
+    lines.append(f"Total Profit: {'+' if result.full_month_profit_pct >= 0 else ''}{result.full_month_profit_pct:.1f}% (${result.full_month_profit_usd:+,.0f})")
+    lines.append(f"Total Trades: {result.full_month_trades}")
+    lines.append(f"Win Rate: {result.full_month_win_rate:.1f}%")
+    lines.append(f"Trading Days: {result.trading_days}")
+    lines.append(f"Profitable Days: {result.profitable_days}")
+    
+    lines.append("")
+    lines.append("=" * 40)
+    lines.append("**C. RISK METRICS (Full Month)**")
+    lines.append("=" * 40)
+    lines.append(f"Max Daily Drawdown: -{result.max_daily_drawdown_pct:.1f}%")
+    lines.append(f"Max Total Drawdown: -{result.max_total_drawdown_pct:.1f}%")
+    lines.append(f"Daily Loss Violations: {result.daily_loss_violations}")
+    lines.append(f"Total Loss Violations: {result.total_loss_violations}")
     
     return "\n".join(lines)
 

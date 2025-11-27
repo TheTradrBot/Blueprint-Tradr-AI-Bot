@@ -1,6 +1,19 @@
 """
 Enhanced Backtest Engine for Blueprint Trader AI.
 
+============================================================================
+USES SHARED STRATEGY ENGINE (strategy_core.py)
+============================================================================
+
+This backtest engine uses the SAME strategy logic as live trading:
+- Calls _compute_confluence_flags() from strategy_core.py
+- Uses identical confluence scoring and filter rules
+- Applies same risk management parameters
+
+RELIABILITY GUARANTEE:
+The /backtest command shows EXACTLY what the bot would have done live
+with the same parameters. No separate "toy" logic exists.
+
 Features:
 - Walk-forward simulation with no look-ahead bias
 - Proper trade execution simulation using candle H/L
@@ -9,6 +22,7 @@ Features:
 - Multiple exit scenarios
 - The5ers challenge simulation (Phase 1 & Phase 2)
 - Daily/total drawdown tracking per prop firm rules
+============================================================================
 """
 
 from __future__ import annotations

@@ -1,3 +1,21 @@
+"""
+Strategy Module for Blueprint Trader AI - Live Scanning Interface.
+
+============================================================================
+USES SHARED STRATEGY ENGINE (strategy_core.py)
+============================================================================
+
+This module is the LIVE TRADING interface to the unified strategy engine.
+It calls strategy_core.generate_signals() which is the SAME logic used by:
+- /backtest command (via backtest.py)
+- /pass command (via challenge_simulator.py)
+
+Any changes to confluence rules, filters, or signal generation in
+strategy_core.py automatically affect live scanning, backtests, and
+challenge simulations identically.
+============================================================================
+"""
+
 from __future__ import annotations
 
 import datetime as dt
