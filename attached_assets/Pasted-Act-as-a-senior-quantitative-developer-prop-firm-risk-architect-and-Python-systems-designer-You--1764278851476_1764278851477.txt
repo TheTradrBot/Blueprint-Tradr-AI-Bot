@@ -1,0 +1,196 @@
+Act as a senior quantitative developer, prop-firm risk architect, and Python systems designer.
+
+You are working inside my existing Blueprint-Tradr bot project here in Replit.
+
+IMPORTANT CONTEXT
+-----------------
+- I already have a **fully working bot**:
+  - It is connected to **Discord** and posts signals/results.
+  - The **Blueprint-Tradr strategy logic** is implemented and working.
+  - **Backtesting** is implemented and working.
+  - The current configuration is tuned around a **The5ers 100K account model** (risk, PnL, display etc.).
+- I am happy with the strategy logic and with the general Discord output format.
+- I want to use this bot as an **automatic trading bot for prop firms**, starting with **The5ers High Stakes 10K challenge on MT5**.
+
+Your task is NOT to redesign everything from scratch.  
+Your task IS to **adapt and optimize this already-working bot** for the **The5ers High Stakes 10K challenge**, while preserving what already works as much as possible.
+
+========================
+PRIMARY OBJECTIVE
+========================
+
+My top priority:
+
+    Adapt and optimize this existing bot so it can realistically PASS
+    The5ers – High Stakes 10K challenge (MT5, 2 phases, +8% then +5%,
+    max daily loss 5%, max total loss 10%, minimum trading days, etc.)
+    as quickly as reasonably possible, WITHOUT breaching any of the rules.
+
+The bot already trades successfully with a 100K risk model. I now need it to:
+
+- Use a **10K account profile** as the default.
+- Scale and tune **risk, position sizing, and risk checks** to the 10K High Stakes challenge.
+- Update **backtests, internal metrics, and Discord output** so everything is consistent with the 10K account.
+- Keep the current strategy logic but optimize it for **fast but safe challenge passing**.
+
+========================
+WHAT YOU SHOULD DO
+========================
+
+1. **Analyze the existing code.**
+   - Identify where the **account size**, **risk per trade**, and **The5ers-style risk rules** are currently defined.
+   - Identify any logic that assumes a **100K account** (e.g., fixed $ figures, profit targets, daily loss numbers).
+   - Identify how the **backtest** code interprets account size and risk.
+   - Identify how **Discord messages** reference account size, risk, PnL, drawdown, etc.
+
+2. **Introduce a clear, configurable account profile for The5ers High Stakes 10K.**
+   - Create a configuration / object for something like:
+
+     - starting_balance = 10,000
+     - phase_1_target_pct ≈ 8%
+     - phase_2_target_pct ≈ 5%
+     - max_daily_loss_pct ≈ 5%
+     - max_total_loss_pct ≈ 10%
+     - minimum number of trading days / profitable days (based on The5ers rules)
+
+   - Do your own research on the current **The5ers High Stakes 10K** rules to confirm the exact numbers and apply them.
+   - Make this 10K profile the **default active profile**.
+   - Optionally keep the 100K profile as an alternative config, but the system should now operate natively in the 10K context.
+
+3. **Retune risk and position sizing for a 10K challenge.**
+   - Use the existing Blueprint-Tradr edge, but adjust:
+     - **Risk per trade** (e.g. around 0.5–1.0% of equity, configurable),
+     - **Max total open risk** (e.g. around 3–4% of equity),
+     - **Max number of concurrent trades** across instruments.
+   - The goal is to:
+     - Aim for **passing a phase in ~1–2 good weeks of trading** (fast, but not insane),
+     - Never allow projected losses to exceed The5ers High Stakes 10K limits.
+   - Implement or refine logic that checks:
+     - current daily loss,
+     - total drawdown from starting balance,
+     - **projected loss** if all open trades hit SL.
+   - Block or scale down new trades when adding them would risk violating:
+     - max daily loss,
+     - max total loss,
+     - sensible safety buffers (e.g. stop at ~4% daily and ~9% total to stay away from hard limits).
+
+4. **Update all 100K-specific assumptions to 10K.**
+   - Anywhere that uses:
+     - fixed dollar amounts based on 100K,
+     - 100K-specific targets or drawdown thresholds,
+     - old labels (“100K account”),
+     change these to be driven by the new 10K profile.
+   - Make sure that:
+     - Backtests,
+     - Live-paper simulations,
+     - Discord outputs,
+     all reflect **10K balance, 10K-based risk, and 10K-based rules**.
+
+5. **Preserve and lightly adapt the Discord output.**
+   - DO NOT completely redesign the Discord formatting; keep the style and structure mostly as it is now.
+   - Only adjust where needed to:
+     - show the correct account size (10K, not 100K),
+     - show risk and PnL in both % and $ terms appropriate to a 10K account,
+     - reflect phase/target progress in terms of The5ers High Stakes 10K challenge.
+   - I still want clear, concise messages suitable for live monitoring, similar to what I already have.
+
+6. **Update the backtest logic to simulate the 10K challenge correctly.**
+   - Make sure backtests:
+     - start with **10,000** equity,
+     - apply the new 10K risk model,
+     - record daily loss, total loss, and any times where The5ers rules would have been violated.
+   - Add or improve backtest metrics that answer:
+     - How often would Phase 1 or Phase 2 be passed?
+     - How often would daily or total drawdown limits be breached?
+     - What is the distribution of time-to-target (how many days/bars needed)?
+   - The goal is to let me quickly see if the tuned configuration is realistically capable of passing the 10K challenge.
+
+7. **Keep the core strategy logic intact.**
+   - The confluence / entry logic (Blueprint-Tradr) is working and should **not** be replaced.
+   - You may refactor for clarity, but:
+     - keep the same basic entry conditions,
+     - keep the same multi-timeframe and confluence ideas,
+     - do not change the “edge” itself unless absolutely necessary for bug fixing.
+
+8. **Respect prop-firm guardrails and weekends/news.**
+   - Make sure the current guard logic (if present) or new logic:
+     - avoids opening new trades in dangerous times:
+       - **no new trades late on Friday**,
+       - flatten or avoid holding over the weekend (if that’s appropriate for the challenge / symbols),
+       - apply a **Monday open cooldown** if needed,
+       - provide hooks for news filters (these can be stubs that I can wire later).
+   - These rules must work correctly with the 10K risk parameters and not accidentally open trades that risk violating daily/total loss constraints around gaps or spikes.
+
+9. **Prepare the code for later connection to MT5 as an automatic EA.**
+   - The bot will eventually be used as a **fully automatic trading bot** connected to **MT5** on a Windows VPS.
+   - Keep this in mind while you refactor:
+     - The **decision/engine layer** should be clearly separated from any execution,
+     - It should be easy for an external Python script (running on the VPS, using the MetaTrader5 library) to:
+       - obtain approved trades (signals) from this bot,
+       - read all necessary fields (symbol, side, entry, SL, TP, volume, unique ID),
+       - understand the risk context (e.g. risk %).
+   - If there is already some kind of signal API or output interface, keep it and ensure it reflects the new 10K risk model.
+
+========================
+PASSING THE 10K HIGH STAKES CHALLENGE
+========================
+
+Your tuning should be explicitly aimed at **maximizing the probability of passing the High Stakes 10K evaluation**, not just making a pretty backtest.
+
+That means:
+
+- You should:
+  - research the latest The5ers High Stakes 10K rules,
+  - encode their constraints correctly,
+  - ensure that daily and total risk checks are strict and conservative.
+- You should design a **medium–high risk profile** that:
+  - takes advantage of the strategy’s edge,
+  - still leaves enough margin that a normal losing streak does **not** instantly fail the challenge.
+
+I expect you to:
+
+- Use the existing backtest engine to:
+  - simulate the 10K profile,
+  - verify that rules are respected,
+  - see whether targets can be reached in a reasonable number of trades/days.
+- Optionally add small self-checks or assertions that would raise warnings if:
+  - parameters imply unrealistic risk,
+  - the projected DD can easily violate rules.
+
+========================
+CONSTRAINTS & EXPECTATIONS
+========================
+
+- Do NOT break the existing working features:
+  - Discord connection and main commands should still work,
+  - Strategy behaviour should remain consistent (barring necessary bugfixes),
+  - Backtests should still run, but now interpret everything as a 10K challenge by default.
+
+- You are free to:
+  - reorganize risk/account configuration into a clearer structure,
+  - add helpful comments,
+  - improve variable naming around risk and The5ers rules.
+
+- After your changes, please ensure:
+  - It’s easy to see, in one place, the configuration for a “The5ers High Stakes 10K” profile.
+  - Discord output clearly states that the bot is running on a **10K High Stakes profile**, not 100K.
+  - It’s straightforward to switch back to a 100K profile if needed (even if 10K stays default).
+
+========================
+FINAL DELIVERABLE
+========================
+
+After refactoring/tuning, the project should:
+
+- Default to a **The5ers High Stakes 10K** account profile.
+- Have:
+  - correct risk per trade,
+  - correct max daily and total loss checks,
+  - concurrency limits and projected risk checks designed for 10K.
+- Run backtests that realistically simulate this 10K challenge.
+- Produce Discord output that:
+  - still looks similar to the current one,
+  - but now shows correct 10K-based metrics and phase progress.
+- Be structurally ready to later plug into an MT5 executor on a Windows VPS for fully automated trading.
+
+Begin by reading through the current configuration and risk code, find where the 100K assumptions live, and then transform the system step-by-step into a 10K High Stakes challenge-optimized version following the requirements above.

@@ -7,6 +7,8 @@ Features:
 - Partial profit taking support
 - Detailed trade logging
 - Multiple exit scenarios
+- The5ers challenge simulation (Phase 1 & Phase 2)
+- Daily/total drawdown tracking per prop firm rules
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from datetime import datetime, date, timedelta, timezone
 from typing import List, Dict, Tuple, Optional
 
 from data import get_ohlcv
-from config import SIGNAL_MODE
+from config import SIGNAL_MODE, ACCOUNT_SIZE, RISK_PER_TRADE_PCT, ACTIVE_ACCOUNT_PROFILE
 from strategy_core import (
     _infer_trend,
     _pick_direction_from_bias,
@@ -284,6 +286,112 @@ def _maybe_exit_trade(
     return None
 
 
+def simulate_challenge_phase(
+    trades: List[Dict],
+    account_size: float,
+    risk_per_trade_pct: float,
+    phase_target_pct: float,
+    max_daily_loss_pct: float,
+    max_total_loss_pct: float,
+    min_profitable_days: int,
+    min_profit_per_day_pct: float,
+) -> Dict:
+    """
+    Simulate a challenge phase with The5ers rules.
+    
+    Returns detailed phase simulation results including:
+    - Whether phase would be passed
+    - Days to complete (if passed)
+    - Rule violations (if any)
+    - Daily breakdown
+    """
+    if not trades:
+        return {
+            "passed": False,
+            "reason": "No trades",
+            "days_to_complete": 0,
+            "profitable_days": 0,
+            "daily_loss_violations": 0,
+            "total_loss_violations": 0,
+            "final_balance": account_size,
+            "final_pnl_pct": 0.0,
+        }
+    
+    balance = account_size
+    peak_balance = account_size
+    risk_per_trade_usd = account_size * risk_per_trade_pct
+    target_balance = account_size * (1 + phase_target_pct)
+    min_day_profit_usd = account_size * min_profit_per_day_pct
+    
+    daily_pnl: Dict[str, float] = {}
+    daily_loss_violations = 0
+    total_loss_violations = 0
+    passed = False
+    days_to_complete = 0
+    
+    for trade in trades:
+        trade_date = trade.get("exit_date", trade.get("entry_date", ""))
+        rr = trade.get("rr", 0)
+        pnl_usd = rr * risk_per_trade_usd
+        
+        if trade_date not in daily_pnl:
+            daily_pnl[trade_date] = 0.0
+        daily_pnl[trade_date] += pnl_usd
+        
+        balance += pnl_usd
+        
+        if balance > peak_balance:
+            peak_balance = balance
+        
+        day_loss = daily_pnl[trade_date]
+        if day_loss < 0 and abs(day_loss) > account_size * max_daily_loss_pct:
+            daily_loss_violations += 1
+        
+        total_dd = account_size - balance
+        if total_dd > account_size * max_total_loss_pct:
+            total_loss_violations += 1
+        
+        if balance >= target_balance and not passed:
+            passed = True
+            days_to_complete = len(daily_pnl)
+    
+    profitable_days = sum(1 for pnl in daily_pnl.values() if pnl >= min_day_profit_usd)
+    
+    if passed and profitable_days < min_profitable_days:
+        passed = False
+    
+    if daily_loss_violations > 0 or total_loss_violations > 0:
+        passed = False
+    
+    final_pnl_pct = ((balance - account_size) / account_size) * 100
+    
+    reason = ""
+    if passed:
+        reason = f"Passed in {days_to_complete} trading days"
+    elif daily_loss_violations > 0:
+        reason = f"Failed: {daily_loss_violations} daily loss violations"
+    elif total_loss_violations > 0:
+        reason = f"Failed: {total_loss_violations} total loss violations"
+    elif profitable_days < min_profitable_days:
+        reason = f"Failed: Only {profitable_days}/{min_profitable_days} profitable days"
+    else:
+        reason = f"Did not reach target ({final_pnl_pct:.1f}% vs {phase_target_pct*100:.1f}%)"
+    
+    return {
+        "passed": passed,
+        "reason": reason,
+        "days_to_complete": days_to_complete if passed else len(daily_pnl),
+        "profitable_days": profitable_days,
+        "min_profitable_days": min_profitable_days,
+        "daily_loss_violations": daily_loss_violations,
+        "total_loss_violations": total_loss_violations,
+        "final_balance": balance,
+        "final_pnl_pct": final_pnl_pct,
+        "target_pnl_pct": phase_target_pct * 100,
+        "trading_days": len(daily_pnl),
+    }
+
+
 def run_backtest(asset: str, period: str) -> Dict:
     """
     Walk-forward backtest of the Blueprint strategy.
@@ -293,6 +401,7 @@ def run_backtest(asset: str, period: str) -> Dict:
     - Proper trade execution simulation
     - Detailed trade logging
     - Conservative exit assumptions
+    - The5ers challenge phase simulation
     """
     daily = get_ohlcv(asset, timeframe="D", count=2000, use_cache=False)
     if not daily:
@@ -470,14 +579,16 @@ def run_backtest(asset: str, period: str) -> Dict:
             "confluence": confluence_score,
         }
 
-    from config import ACCOUNT_SIZE, RISK_PER_TRADE_PCT
+    account_size = ACCOUNT_SIZE
+    risk_per_trade_pct = RISK_PER_TRADE_PCT
+    profile = ACTIVE_ACCOUNT_PROFILE
     
     total_trades = len(trades)
     if total_trades > 0:
         wins = sum(1 for t in trades if t["rr"] > 0)
         win_rate = wins / total_trades * 100.0
         total_rr = sum(t["rr"] for t in trades)
-        net_return_pct = total_rr * RISK_PER_TRADE_PCT * 100
+        net_return_pct = total_rr * risk_per_trade_pct * 100
         avg_rr = total_rr / total_trades
     else:
         win_rate = 0.0
@@ -485,7 +596,7 @@ def run_backtest(asset: str, period: str) -> Dict:
         total_rr = 0.0
         avg_rr = 0.0
 
-    risk_per_trade_usd = ACCOUNT_SIZE * RISK_PER_TRADE_PCT
+    risk_per_trade_usd = account_size * risk_per_trade_pct
     total_profit_usd = total_rr * risk_per_trade_usd
     
     running_pnl = 0.0
@@ -500,7 +611,7 @@ def run_backtest(asset: str, period: str) -> Dict:
         if drawdown > max_drawdown:
             max_drawdown = drawdown
     
-    max_drawdown_pct = (max_drawdown / ACCOUNT_SIZE) * 100 if ACCOUNT_SIZE > 0 else 0.0
+    max_drawdown_pct = (max_drawdown / account_size) * 100 if account_size > 0 else 0.0
 
     tp1_trail_hits = sum(1 for t in trades if t.get("exit_reason") == "TP1+Trail")
     tp2_hits = sum(1 for t in trades if t.get("exit_reason") == "TP2")
@@ -509,14 +620,35 @@ def run_backtest(asset: str, period: str) -> Dict:
     
     wins = tp1_trail_hits + tp2_hits + tp3_hits
 
+    phase1_target = profile.phases[0].profit_target_pct if profile.phases else 0.08
+    phase2_target = profile.phases[1].profit_target_pct if len(profile.phases) > 1 else 0.05
+    min_profitable_days = profile.phases[0].min_profitable_days if profile.phases else 3
+    min_profit_per_day = profile.phases[0].min_profit_per_day_pct if profile.phases else 0.005
+    
+    phase1_sim = simulate_challenge_phase(
+        trades=trades,
+        account_size=account_size,
+        risk_per_trade_pct=risk_per_trade_pct,
+        phase_target_pct=phase1_target,
+        max_daily_loss_pct=profile.max_daily_loss_pct,
+        max_total_loss_pct=profile.max_total_loss_pct,
+        min_profitable_days=min_profitable_days,
+        min_profit_per_day_pct=min_profit_per_day,
+    )
+
     notes_text = (
-        f"Backtest Summary - {asset} ({period_label}, 100K 5%ers model)\n"
+        f"Backtest Summary - {asset} ({period_label}, {profile.display_name})\n"
         f"Trades: {total_trades}\n"
         f"Win rate: {win_rate:.1f}%\n"
         f"Total profit: +${total_profit_usd:,.0f} (+{net_return_pct:.1f}%)\n"
         f"Max drawdown: -{max_drawdown_pct:.1f}%\n"
         f"Expectancy: {avg_rr:+.2f}R / trade\n"
-        f"TP1+Trail ({tp1_trail_hits}), TP2 ({tp2_hits}), TP3 ({tp3_hits}), SL ({sl_hits})"
+        f"TP1+Trail ({tp1_trail_hits}), TP2 ({tp2_hits}), TP3 ({tp3_hits}), SL ({sl_hits})\n"
+        f"\n"
+        f"Phase 1 Simulation ({phase1_target*100:.0f}% target):\n"
+        f"  {'PASS' if phase1_sim['passed'] else 'FAIL'}: {phase1_sim['reason']}\n"
+        f"  Profitable days: {phase1_sim['profitable_days']}/{min_profitable_days}\n"
+        f"  Rule violations: Daily={phase1_sim['daily_loss_violations']}, Total={phase1_sim['total_loss_violations']}"
     )
 
     return {
@@ -534,6 +666,8 @@ def run_backtest(asset: str, period: str) -> Dict:
         "sl_hits": sl_hits,
         "trades": trades,
         "notes": notes_text,
-        "account_size": ACCOUNT_SIZE,
-        "risk_per_trade_pct": RISK_PER_TRADE_PCT,
+        "account_size": account_size,
+        "risk_per_trade_pct": risk_per_trade_pct,
+        "profile_name": profile.display_name,
+        "phase1_simulation": phase1_sim,
     }

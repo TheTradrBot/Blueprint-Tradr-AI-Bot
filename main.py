@@ -18,6 +18,8 @@ from config import (
     ENERGIES,
     CRYPTO_ASSETS,
     SIGNAL_MODE,
+    ACTIVE_ACCOUNT_PROFILE,
+    get_profile_info,
 )
 
 from strategy import (
@@ -51,6 +53,8 @@ from config import ACCOUNT_SIZE, RISK_PER_TRADE_PCT
 
 from backtest import run_backtest
 from data import get_ohlcv, get_cache_stats, clear_cache, get_current_prices
+from risk_manager import get_risk_manager, RiskCheckResult
+from discord_output import create_phase_progress_embed
 
 
 ACTIVE_TRADES: dict[str, ScanResult] = {}
@@ -615,6 +619,8 @@ async def debug_cmd(interaction: discord.Interaction):
         channels_status.append(f"Trades: {'OK' if trades_ch else 'NOT FOUND'}")
         channels_status.append(f"Updates: {'OK' if updates_ch else 'NOT FOUND'}")
         
+        profile = ACTIVE_ACCOUNT_PROFILE
+        
         msg = (
             "**Blueprint Trader AI - Debug Info**\n\n"
             f"**Status:** {uptime_str}\n"
@@ -625,15 +631,73 @@ async def debug_cmd(interaction: discord.Interaction):
             f"  {' | '.join(channels_status)}\n\n"
             f"**Active Trades:** {len(ACTIVE_TRADES)}\n"
             f"**Cache:** {cache_stats['cached_items']} items, {cache_stats['hit_rate_pct']}% hit rate\n\n"
-            f"**Account Config:**\n"
-            f"  Size: ${ACCOUNT_SIZE:,}\n"
-            f"  Risk/Trade: {RISK_PER_TRADE_PCT*100:.1f}%\n\n"
+            f"**Account Profile:** {profile.display_name}\n"
+            f"  Balance: ${profile.starting_balance:,.0f}\n"
+            f"  Risk/Trade: {profile.risk_per_trade_pct*100:.1f}%\n"
+            f"  Max Daily Loss: {profile.max_daily_loss_pct*100:.0f}%\n"
+            f"  Max Total Loss: {profile.max_total_loss_pct*100:.0f}%\n"
+            f"  Max Concurrent: {profile.max_concurrent_trades} trades\n"
+            f"  Phase 1 Target: {profile.phases[0].profit_target_pct*100:.0f}%\n"
+            f"  Phase 2 Target: {profile.phases[1].profit_target_pct*100:.0f}%\n\n"
             f"**System:** Python {platform.python_version()}"
         )
         
         await interaction.response.send_message(msg, ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"Error getting debug info: {str(e)}", ephemeral=True)
+
+
+@bot.tree.command(name="risk", description="Show current risk status and phase progress.")
+async def risk_cmd(interaction: discord.Interaction):
+    """Show risk status and challenge progress."""
+    try:
+        rm = get_risk_manager()
+        summary = rm.get_risk_summary()
+        phase_progress = summary.get("phase_progress", {})
+        
+        embed = create_phase_progress_embed(phase_progress, summary)
+        await interaction.response.send_message(embed=embed)
+    except Exception as e:
+        await interaction.response.send_message(f"Error getting risk status: {str(e)}", ephemeral=True)
+
+
+@bot.tree.command(name="profile", description="Show current account profile settings.")
+async def profile_cmd(interaction: discord.Interaction):
+    """Show active account profile details."""
+    profile = ACTIVE_ACCOUNT_PROFILE
+    
+    lines = [
+        f"**{profile.display_name}**",
+        "",
+        f"**Account:**",
+        f"  Starting Balance: ${profile.starting_balance:,.0f}",
+        f"  Currency: {profile.currency}",
+        "",
+        f"**Risk Settings:**",
+        f"  Risk per Trade: {profile.risk_per_trade_pct*100:.1f}%",
+        f"  Max Open Risk: {profile.max_open_risk_pct*100:.0f}%",
+        f"  Max Concurrent Trades: {profile.max_concurrent_trades}",
+        "",
+        f"**Challenge Rules:**",
+        f"  Max Daily Loss: {profile.max_daily_loss_pct*100:.0f}%",
+        f"  Max Total Loss: {profile.max_total_loss_pct*100:.0f}%",
+        "",
+        f"**Phases:**",
+    ]
+    
+    for i, phase in enumerate(profile.phases, 1):
+        lines.append(
+            f"  Phase {i}: {phase.profit_target_pct*100:.0f}% target, "
+            f"{phase.min_profitable_days} profitable days"
+        )
+    
+    lines.append("")
+    lines.append(f"**Trading Restrictions:**")
+    lines.append(f"  Friday Cutoff: {profile.friday_cutoff_hour_utc}:00 UTC")
+    lines.append(f"  Monday Cooldown: {profile.monday_cooldown_hours}h")
+    lines.append(f"  News Blackout: {profile.news_blackout_minutes} min")
+    
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
 @tasks.loop(hours=SCAN_INTERVAL_HOURS)
@@ -678,6 +742,8 @@ async def autoscan_loop():
             live_prices = await asyncio.to_thread(get_current_prices, list(set(active_trade_symbols)))
             print(f"[autoscan] Got live prices for {len(live_prices)} symbols")
         
+        rm = get_risk_manager()
+        
         for trade in pending_trades:
             trade_key = f"{trade.symbol}_{trade.direction}"
             
@@ -692,6 +758,34 @@ async def autoscan_loop():
                 continue
             
             trade.entry = live_mid
+            
+            sizing = calculate_position_size_5ers(
+                symbol=trade.symbol,
+                entry_price=trade.entry,
+                stop_price=trade.stop_loss,
+            )
+            risk_usd = sizing.get("risk_usd", 100)
+            
+            risk_check = rm.validate_new_trade(
+                symbol=trade.symbol,
+                direction=trade.direction,
+                risk_usd=risk_usd,
+                current_open_trades=len(ACTIVE_TRADES),
+            )
+            
+            if not risk_check.allowed:
+                print(f"[autoscan] {trade.symbol}: BLOCKED by risk manager - {risk_check.rejection_reason}")
+                blocked_embed = discord.Embed(
+                    title=f"Trade Blocked: {trade.symbol}",
+                    description=risk_check.rejection_reason,
+                    color=discord.Color.orange(),
+                )
+                blocked_embed.add_field(name="Direction", value=trade.direction, inline=True)
+                blocked_embed.add_field(name="Risk USD", value=f"${risk_usd:.2f}", inline=True)
+                blocked_embed.add_field(name="Warning Level", value=risk_check.warning_level or "None", inline=True)
+                await trades_channel.send(embed=blocked_embed)
+                continue
+            
             print(f"[autoscan] {trade.symbol}: Using live price {live_mid:.5f} as entry")
             
             entry_time = datetime.utcnow()
@@ -701,12 +795,6 @@ async def autoscan_loop():
             _ensure_trade_progress(trade_key)
 
             confluence_items = build_confluence_list(trade)
-            
-            sizing = calculate_position_size_5ers(
-                symbol=trade.symbol,
-                entry_price=trade.entry,
-                stop_price=trade.stop_loss,
-            )
             
             TRADE_SIZING[trade_key] = sizing
             
@@ -724,6 +812,9 @@ async def autoscan_loop():
                 description=f"High-confluence setup with {trade.confluence_score}/7 factors aligned.",
                 entry_datetime=entry_time,
             )
+            
+            if risk_check.warning_level:
+                embed.add_field(name="Risk Warning", value=risk_check.warning_level, inline=False)
             
             await trades_channel.send(embed=embed)
 

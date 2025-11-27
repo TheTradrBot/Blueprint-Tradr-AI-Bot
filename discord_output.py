@@ -6,8 +6,10 @@ Provides clean, professional Discord embeds for:
 - Trade activations
 - Trade updates (TP/SL hits)
 - Trade closes
+- Phase progress
 
-Uses 5%ers 100K High Stakes risk model for lot sizing.
+Uses active account profile for all sizing and display.
+Default: The5ers High Stakes 10K
 """
 
 import discord
@@ -15,7 +17,7 @@ import hashlib
 from datetime import datetime
 from typing import Optional, List
 
-from config import ACCOUNT_SIZE, RISK_PER_TRADE_PCT
+from config import ACCOUNT_SIZE, RISK_PER_TRADE_PCT, ACTIVE_ACCOUNT_PROFILE
 from position_sizing import (
     calculate_position_size_5ers,
     calculate_rr_values,
@@ -39,6 +41,11 @@ def generate_trade_id(symbol: str, direction: str, timestamp: Optional[datetime]
     return hashlib.md5(data.encode()).hexdigest()[:8].upper()
 
 
+def get_profile_footer() -> str:
+    """Get footer text showing active profile."""
+    return f"Blueprint Trader AI | {ACTIVE_ACCOUNT_PROFILE.display_name} | {RISK_PER_TRADE_PCT*100:.1f}% risk"
+
+
 def create_setup_embed(
     symbol: str,
     direction: str,
@@ -51,8 +58,8 @@ def create_setup_embed(
     confluence_score: int = 0,
     confluence_items: List[str] = None,
     description: str = None,
-    account_size: float = ACCOUNT_SIZE,
-    risk_pct: float = RISK_PER_TRADE_PCT,
+    account_size: float = None,
+    risk_pct: float = None,
     entry_datetime: Optional[datetime] = None,
 ) -> discord.Embed:
     """
@@ -68,12 +75,17 @@ def create_setup_embed(
         confluence_score: Score out of 7
         confluence_items: List of confluence factors
         description: Brief trade description
-        account_size: Account balance for sizing
-        risk_pct: Risk percentage per trade
+        account_size: Account balance for sizing (default: from profile)
+        risk_pct: Risk percentage per trade (default: from profile)
         
     Returns:
         discord.Embed object ready to send
     """
+    if account_size is None:
+        account_size = ACCOUNT_SIZE
+    if risk_pct is None:
+        risk_pct = RISK_PER_TRADE_PCT
+    
     is_long = direction.lower() == "bullish"
     emoji = "🟢" if is_long else "🔴"
     dir_text = "LONG" if is_long else "SHORT"
@@ -127,12 +139,12 @@ def create_setup_embed(
         inline=False
     )
     
-    risk_text = f"**Account:** ${account_size:,.0f} (High Stakes)\n"
+    risk_text = f"**Account:** ${account_size:,.0f} ({ACTIVE_ACCOUNT_PROFILE.display_name})\n"
     risk_text += f"**Risk:** {sizing['risk_pct']*100:.2f}%  |  ${sizing['risk_usd']:,.0f}\n"
     risk_text += f"**Lot size:** {sizing['lot_size']:.2f} lots"
     
     embed.add_field(
-        name="Risk & Lot Size (100K 5%ers)",
+        name="Risk & Position Size",
         value=risk_text,
         inline=False
     )
@@ -146,7 +158,7 @@ def create_setup_embed(
         )
     
     trade_id = generate_trade_id(symbol, direction)
-    embed.set_footer(text=f"Blueprint Trader AI • ID: {trade_id} • Backtested with 5%ers 100K risk settings")
+    embed.set_footer(text=f"{get_profile_footer()} | ID: {trade_id}")
     
     return embed
 
@@ -189,8 +201,10 @@ def create_activation_embed(
     embed.add_field(name="Lot Size", value=f"{lot_size:.2f}", inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
     
+    footer_text = get_profile_footer()
     if trade_id:
-        embed.set_footer(text=f"Trade ID: {trade_id}")
+        footer_text += f" | ID: {trade_id}"
+    embed.set_footer(text=footer_text)
     
     return embed
 
@@ -252,6 +266,8 @@ def create_tp_hit_embed(
             inline=True
         )
     
+    embed.set_footer(text=get_profile_footer())
+    
     return embed
 
 
@@ -289,13 +305,16 @@ def create_sl_hit_embed(
     embed.add_field(name="Result", value=result_text, inline=True)
     
     if daily_pnl_usd is not None:
+        max_daily_loss = ACTIVE_ACCOUNT_PROFILE.max_daily_loss_pct * 100
         daily_text = f"${daily_pnl_usd:,.0f}  ({daily_pnl_pct:.2f}%)"
-        status = "Within limits" if abs(daily_pnl_pct) < 5.0 else "Near 5% limit"
+        status = "Within limits" if abs(daily_pnl_pct) < max_daily_loss else f"Near {max_daily_loss:.0f}% limit"
         embed.add_field(
             name="Daily P/L",
             value=f"{daily_text}\n{status}",
             inline=False
         )
+    
+    embed.set_footer(text=get_profile_footer())
     
     return embed
 
@@ -345,6 +364,8 @@ def create_trade_closed_embed(
         daily_text = f"{daily_sign}${daily_pnl_usd:,.0f}  ({daily_sign}{daily_pnl_pct:.2f}%)"
         embed.add_field(name="Day P/L", value=daily_text, inline=True)
     
+    embed.set_footer(text=get_profile_footer())
+    
     return embed
 
 
@@ -361,9 +382,13 @@ def create_backtest_embed(
     tp3_hits: int,
     sl_hits: int,
     avg_rr: float = 0.0,
-    account_size: float = ACCOUNT_SIZE,
+    account_size: float = None,
+    phase1_simulation: dict = None,
 ) -> discord.Embed:
-    """Create embed for backtest results."""
+    """Create embed for backtest results with challenge simulation."""
+    if account_size is None:
+        account_size = ACCOUNT_SIZE
+    
     display_asset = asset.replace("_", "/")
     
     is_profitable = total_profit_usd > 0
@@ -374,7 +399,7 @@ def create_backtest_embed(
     
     embed = discord.Embed(
         title=title,
-        description=f"Period: {period} | Account: ${account_size:,.0f} (5%ers High Stakes)",
+        description=f"Period: {period} | Account: ${account_size:,.0f} ({ACTIVE_ACCOUNT_PROFILE.display_name})",
         color=color,
         timestamp=datetime.utcnow()
     )
@@ -396,9 +421,77 @@ def create_backtest_embed(
     
     embed.add_field(name="Exit Breakdown", value=exit_text, inline=False)
     
-    embed.set_footer(text="Blueprint Trader AI • 5%ers 100K Risk Model • 1% risk per trade")
+    if phase1_simulation:
+        phase_emoji = "✅" if phase1_simulation.get("passed") else "❌"
+        phase_text = f"{phase_emoji} **Phase 1 ({phase1_simulation.get('target_pnl_pct', 8):.0f}% target):**\n"
+        phase_text += f"{phase1_simulation.get('reason', 'Unknown')}\n"
+        phase_text += f"Profitable days: {phase1_simulation.get('profitable_days', 0)}/{phase1_simulation.get('min_profitable_days', 3)}\n"
+        phase_text += f"Daily violations: {phase1_simulation.get('daily_loss_violations', 0)} | Total violations: {phase1_simulation.get('total_loss_violations', 0)}"
+        
+        embed.add_field(name="Challenge Simulation", value=phase_text, inline=False)
+    
+    embed.set_footer(text=get_profile_footer())
     
     return embed
+
+
+def create_phase_progress_embed(
+    phase_progress: dict,
+    risk_summary: dict = None,
+) -> discord.Embed:
+    """Create embed showing current phase progress."""
+    phase_name = phase_progress.get("phase_name", "Phase 1")
+    current_pct = phase_progress.get("current_profit_pct", 0)
+    target_pct = phase_progress.get("target_profit_pct", 8)
+    progress = phase_progress.get("progress_pct", 0)
+    profitable_days = phase_progress.get("profitable_days", 0)
+    min_days = phase_progress.get("min_profitable_days", 3)
+    
+    color = COLOR_SUCCESS if progress >= 100 else COLOR_WARNING if progress >= 50 else COLOR_NEUTRAL
+    
+    title = f"📊 {ACTIVE_ACCOUNT_PROFILE.display_name} - {phase_name} Progress"
+    
+    embed = discord.Embed(
+        title=title,
+        color=color,
+        timestamp=datetime.utcnow()
+    )
+    
+    progress_bar = _create_progress_bar(progress)
+    progress_text = f"{progress_bar}\n"
+    progress_text += f"**Current:** {current_pct:+.2f}% | **Target:** {target_pct:.0f}%"
+    
+    embed.add_field(name="Profit Progress", value=progress_text, inline=False)
+    
+    days_bar = _create_progress_bar((profitable_days / min_days) * 100 if min_days > 0 else 0)
+    days_text = f"{days_bar}\n"
+    days_text += f"**Profitable Days:** {profitable_days}/{min_days}"
+    
+    embed.add_field(name="Trading Days", value=days_text, inline=False)
+    
+    if risk_summary:
+        daily_pnl = risk_summary.get("daily_pnl_pct", 0)
+        total_dd = risk_summary.get("total_drawdown_pct", 0)
+        max_daily = ACTIVE_ACCOUNT_PROFILE.max_daily_loss_pct * 100
+        max_total = ACTIVE_ACCOUNT_PROFILE.max_total_loss_pct * 100
+        
+        risk_text = f"**Daily P/L:** {daily_pnl:+.2f}% (limit: -{max_daily:.0f}%)\n"
+        risk_text += f"**Total DD:** {total_dd:.2f}% (limit: {max_total:.0f}%)\n"
+        risk_text += f"**Open Risk:** {risk_summary.get('open_risk_pct', 0):.2f}%"
+        
+        embed.add_field(name="Risk Status", value=risk_text, inline=False)
+    
+    embed.set_footer(text=get_profile_footer())
+    
+    return embed
+
+
+def _create_progress_bar(pct: float, length: int = 10) -> str:
+    """Create a text-based progress bar."""
+    filled = int((pct / 100) * length)
+    filled = max(0, min(filled, length))
+    empty = length - filled
+    return f"[{'▓' * filled}{'░' * empty}] {pct:.1f}%"
 
 
 def build_confluence_list(scan_result) -> List[str]:

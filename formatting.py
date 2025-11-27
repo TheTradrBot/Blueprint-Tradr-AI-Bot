@@ -6,12 +6,15 @@ Provides clean, comprehensive output for scan results with:
 - Confluence scores
 - Setup types and what to look for
 - Trade levels when available
+
+Uses active account profile for all display.
 """
 
 from __future__ import annotations
 
 from typing import List, Optional
 from strategy import ScanResult
+from config import ACCOUNT_SIZE, ACTIVE_ACCOUNT_PROFILE
 
 
 def format_scan_summary(results: List[ScanResult]) -> str:
@@ -154,7 +157,10 @@ def format_autoscan_output(markets: dict) -> List[str]:
     """
     messages: List[str] = []
     
-    summary_lines = ["📊 **4H AUTOSCAN COMPLETE**", ""]
+    summary_lines = [
+        f"📊 **4H AUTOSCAN COMPLETE** | {ACTIVE_ACCOUNT_PROFILE.display_name}",
+        ""
+    ]
     
     total_potential = 0
     
@@ -207,7 +213,7 @@ def format_trade_update(symbol: str, direction: str, event_type: str, price: flo
 
 
 def format_backtest_result(result: dict) -> str:
-    """Format backtest results for Discord with 5%ers 100K model."""
+    """Format backtest results for Discord with active account profile."""
     asset = result.get("asset", "Unknown")
     period = result.get("period", "Unknown")
     total = result.get("total_trades", 0)
@@ -216,7 +222,8 @@ def format_backtest_result(result: dict) -> str:
     total_profit_usd = result.get("total_profit_usd", 0.0)
     max_drawdown_pct = result.get("max_drawdown_pct", 0.0)
     avg_rr = result.get("avg_rr", 0.0)
-    account_size = result.get("account_size", 100000)
+    account_size = result.get("account_size", ACCOUNT_SIZE)
+    profile_name = result.get("profile_name", ACTIVE_ACCOUNT_PROFILE.display_name)
     
     tp1_trail = result.get("tp1_trail_hits", 0)
     tp2_count = result.get("tp2_hits", 0)
@@ -230,7 +237,7 @@ def format_backtest_result(result: dict) -> str:
     
     lines = [
         f"📊 **Backtest Results - {asset}**",
-        f"Period: {period} | Account: ${account_size:,.0f} (5%ers High Stakes)",
+        f"Period: {period} | Account: ${account_size:,.0f} ({profile_name})",
         "",
         f"**Performance:**",
         f"{profit_emoji} Total Profit: **{sign}${total_profit_usd:,.0f}** ({sign}{net_return:.1f}%)",
@@ -243,8 +250,16 @@ def format_backtest_result(result: dict) -> str:
         f"• SL: {sl_count}",
     ]
     
+    phase1_sim = result.get("phase1_simulation")
+    if phase1_sim:
+        lines.append("")
+        phase_emoji = "✅" if phase1_sim.get("passed") else "❌"
+        lines.append(f"**Challenge Simulation (Phase 1):**")
+        lines.append(f"{phase_emoji} {phase1_sim.get('reason', 'Unknown')}")
+        lines.append(f"Profitable days: {phase1_sim.get('profitable_days', 0)}/{phase1_sim.get('min_profitable_days', 3)}")
+    
     lines.append("")
-    lines.append("_5%ers 100K Risk Model • 1% risk per trade_")
+    lines.append(f"_{profile_name} | {ACTIVE_ACCOUNT_PROFILE.risk_per_trade_pct*100:.1f}% risk per trade_")
     
     return "\n".join(lines)
 

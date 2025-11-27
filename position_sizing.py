@@ -1,17 +1,20 @@
 """
-Position sizing module for 5%ers 100K High Stakes account.
+Position sizing module for Blueprint Trader AI.
 
 Implements proper lot size calculation based on:
-- Account size ($100,000)
-- Risk per trade (default 1%)
+- Active account profile (10K or 100K High Stakes)
+- Risk per trade (configurable, default 1%)
 - Stop loss distance
 - Contract specifications per instrument
+
+Uses account_profiles.py for configuration.
 """
 
 from config import (
     ACCOUNT_SIZE,
     RISK_PER_TRADE_PCT,
     CONTRACT_SPECS,
+    ACTIVE_ACCOUNT_PROFILE,
 )
 
 
@@ -57,7 +60,7 @@ def calculate_position_size(
     contract_specs: dict = None
 ) -> dict:
     """
-    Calculate position size for 5%ers account.
+    Calculate position size for trading account.
     
     Args:
         symbol: Trading instrument (e.g., "EUR_USD", "XAU_USD")
@@ -138,22 +141,27 @@ def calculate_position_size_5ers(
     symbol: str,
     entry_price: float,
     stop_price: float,
-    account_size: float = ACCOUNT_SIZE,
-    risk_pct: float = RISK_PER_TRADE_PCT,
+    account_size: float = None,
+    risk_pct: float = None,
 ) -> dict:
     """
-    Convenience wrapper using 5%ers default settings.
+    Convenience wrapper using active profile settings.
     
     Args:
         symbol: Trading instrument
         entry_price: Entry price level  
         stop_price: Stop loss price level
-        account_size: Account balance (default: 100K)
-        risk_pct: Risk per trade (default: 1%)
+        account_size: Account balance (default: from active profile)
+        risk_pct: Risk per trade (default: from active profile)
         
     Returns:
         Position sizing dict with lot_size, risk_usd, etc.
     """
+    if account_size is None:
+        account_size = ACCOUNT_SIZE
+    if risk_pct is None:
+        risk_pct = RISK_PER_TRADE_PCT
+    
     return calculate_position_size(
         symbol=symbol,
         account_size=account_size,
@@ -210,3 +218,8 @@ def format_lot_size_display(lot_size: float) -> str:
 def format_risk_display(risk_usd: float, risk_pct: float) -> str:
     """Format risk for display."""
     return f"{risk_pct*100:.2f}%  |  ${risk_usd:,.0f}"
+
+
+def get_profile_display() -> str:
+    """Get display string for current profile in position sizing context."""
+    return f"{ACTIVE_ACCOUNT_PROFILE.display_name} ({RISK_PER_TRADE_PCT*100:.1f}% risk)"
