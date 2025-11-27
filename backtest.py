@@ -624,20 +624,36 @@ def run_backtest(asset: str, period: str) -> Dict:
         if entry is None or sl is None or tp1 is None:
             continue
 
-        risk = abs(entry - sl)
+        # Use ACTUAL market execution price: the daily candle close at entry
+        # Theoretical entry is just for level calculation; real execution is at market price
+        execution_entry = close
+        
+        # Recalculate SL and TP based on actual entry price, keep the same risk
+        risk_theoretical = abs(entry - sl)
+        if risk_theoretical <= 0:
+            continue
+        
+        # Scale all levels proportionally based on actual execution entry
+        price_diff = execution_entry - entry
+        execution_sl = sl + price_diff
+        execution_tp1 = tp1 + price_diff
+        execution_tp2 = tp2 + price_diff
+        execution_tp3 = tp3 + price_diff
+        
+        risk = abs(execution_entry - execution_sl)
         if risk <= 0:
             continue
 
         open_trade = {
             "asset": asset,
             "direction": direction,
-            "entry": entry,
-            "sl": sl,
-            "tp1": tp1,
-            "tp2": tp2,
-            "tp3": tp3,
-            "tp4": tp4,
-            "tp5": tp5,
+            "entry": execution_entry,
+            "sl": execution_sl,
+            "tp1": execution_tp1,
+            "tp2": execution_tp2,
+            "tp3": execution_tp3,
+            "tp4": None,
+            "tp5": None,
             "risk": risk,
             "entry_date": d_i,
             "entry_index": idx,
