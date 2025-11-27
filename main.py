@@ -906,6 +906,96 @@ async def pass_command(interaction: discord.Interaction, month: int, year: int):
         await interaction.followup.send(f"Error running challenge simulation: {str(e)}")
 
 
+@bot.tree.command(name="output", description="Export detailed trades from challenge simulation for charting validation.")
+@app_commands.describe(
+    month="Month (1-12)",
+    year="Year (e.g., 2024)"
+)
+async def output_command(interaction: discord.Interaction, month: int, year: int):
+    """Export all trades from challenge simulation grouped by asset with entry/exit dates and prices."""
+    if not 1 <= month <= 12:
+        await interaction.response.send_message(
+            "Invalid month. Please enter a value between 1 and 12.",
+            ephemeral=True
+        )
+        return
+    
+    if not 2020 <= year <= 2030:
+        await interaction.response.send_message(
+            "Invalid year. Please enter a value between 2020 and 2030.",
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.defer()
+    
+    try:
+        result = await asyncio.to_thread(simulate_challenge_for_month, year, month)
+        
+        if not result.trades:
+            await interaction.followup.send(f"No trades found for {calendar.month_name[month]} {year}.", ephemeral=True)
+            return
+        
+        # Group trades by asset
+        trades_by_asset = {}
+        for trade in result.trades:
+            asset = trade.get("asset", "UNKNOWN")
+            if asset not in trades_by_asset:
+                trades_by_asset[asset] = []
+            trades_by_asset[asset].append(trade)
+        
+        # Format output by asset
+        messages = []
+        current_msg = f"**Trade Export: {calendar.month_name[month]} {year}**\n"
+        current_msg += f"Total Trades: {len(result.trades)} | Period: {result.trading_days} trading days\n"
+        current_msg += "=" * 50 + "\n\n"
+        
+        for asset in sorted(trades_by_asset.keys()):
+            trades = trades_by_asset[asset]
+            asset_msg = f"**{asset}** ({len(trades)} trades)\n"
+            
+            for i, trade in enumerate(trades, 1):
+                entry_date = trade.get("entry_date", "N/A")
+                entry_price = trade.get("entry", 0)
+                direction = trade.get("direction", "?")
+                sl = trade.get("sl", 0)
+                tp1 = trade.get("tp1", 0)
+                tp2 = trade.get("tp2", 0)
+                tp3 = trade.get("tp3", 0)
+                exit_date = trade.get("exit_date", "N/A")
+                exit_reason = trade.get("exit_reason", "?")
+                rr = trade.get("rr", 0)
+                
+                trade_line = (
+                    f"{i}. [{entry_date}] {direction.upper()}\n"
+                    f"   Entry: {entry_price:.5f} | SL: {sl:.5f}\n"
+                    f"   TP1: {tp1:.5f} | TP2: {tp2:.5f} | TP3: {tp3:.5f}\n"
+                    f"   Exit: {exit_reason} @ {exit_date} | R/R: {rr:+.2f}R\n\n"
+                )
+                
+                if len(current_msg) + len(asset_msg) + len(trade_line) > 1900:
+                    messages.append(current_msg + asset_msg)
+                    current_msg = ""
+                    asset_msg = f"**{asset}** (continued)\n"
+                
+                asset_msg += trade_line
+            
+            current_msg += asset_msg
+        
+        if current_msg.strip():
+            messages.append(current_msg)
+        
+        # Send all messages
+        for msg in messages:
+            chunks = split_message(msg, limit=1900)
+            for chunk in chunks:
+                await interaction.followup.send(chunk)
+    
+    except Exception as e:
+        print(f"[/output] Error exporting trades: {e}")
+        await interaction.followup.send(f"Error exporting trades: {str(e)}", ephemeral=True)
+
+
 @tasks.loop(hours=SCAN_INTERVAL_HOURS)
 async def autoscan_loop():
     await bot.wait_until_ready()
